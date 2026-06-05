@@ -91,6 +91,8 @@ Parametri configurabili via `/api/config`:
 |---|---:|---|
 | `daily_loss_limit_pct` | `3.0` | Perdita giornaliera massima in percentuale della baseline del giorno |
 | `daily_loss_limit_enabled` | `true` | Abilita/disabilita il blocco giornaliero |
+| `allow_short` | `false` | Abilita gli ingressi SHORT simulati in paper |
+| `min_entry_score` | `75` | Score minimo per aprire una nuova posizione |
 | `reconnect_initial_delay_sec` | `2` | Primo ritardo prima del reconnect |
 | `reconnect_max_delay_sec` | `60` | Backoff massimo tra reconnect |
 
@@ -101,10 +103,12 @@ Il paper trading applica fee e slippage configurabili nel backend:
 - `fee_pct` default `0.001`
 - `slippage_pct` default `0.0002`
 - `max_notional_pct` default `0.95`
+- `min_entry_score` default `75`
+- `allow_short` default `false`
 
 Il capitale viene aggiornato con `pnl_net`, cioe' PnL lordo meno fee di ingresso e uscita. Ogni trade salva prezzi signal/fill, fee, slippage, sizing e PnL lordo/netto.
 
-Gli SHORT sono simulati solo in paper. Binance Spot non apre short reali.
+Gli SHORT sono simulati solo in paper. Binance Spot non apre short reali. Per evitare aperture short involontarie, gli ingressi short sono disabilitati di default; si abilitano solo con `allow_short=true` via `/api/config`.
 
 ## API Locale
 

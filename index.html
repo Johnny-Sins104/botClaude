@@ -217,6 +217,7 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
 
     <div class="rp-section">
       <div class="rp-title">Condizioni strategia</div>
+      <div id="cond-meta" style="color:var(--txt3); font-size:10px; line-height:1.5; margin-bottom:8px">In attesa di candela chiusa...</div>
       <div class="cond-list" id="cond-list">
         <div style="color:var(--txt3); font-size:11px">In attesa di segnale...</div>
       </div>
@@ -369,6 +370,13 @@ function updateSignalBox(s) {
     document.getElementById('sig-d').textContent    = sig.detail || 'Nessun segnale forte';
     document.getElementById('sig-conf').textContent = '';
   }
+  if (!pos && sig.entry_block_reason) {
+    document.getElementById('sig-t').textContent = `${(sig.type || 'wait').toUpperCase()} BLOCCATO`;
+    document.getElementById('sig-d').textContent = `${sig.detail || ''} | ${sig.entry_block_reason}`;
+    const sc = document.getElementById('sig-conf');
+    sc.textContent = 'BLOCK';
+    sc.style.color = '#f59e0b';
+  }
 }
 
 function updatePosition(s) {
@@ -408,15 +416,26 @@ function updateConditions(s) {
   const conds = (s.signal || {}).conditions || [];
   const sig   = (s.signal || {}).type || 'wait';
   const el    = document.getElementById('cond-list');
+  const meta  = document.getElementById('cond-meta');
+  const signal = s.signal || {};
+  const updated = signal.evaluated_at ? new Date(signal.evaluated_at).toLocaleTimeString('it-IT') : '-';
+  const closePx = signal.close_price ? fp(signal.close_price) : '-';
+  const entryState = signal.entry_allowed
+    ? 'entry consentita'
+    : signal.entry_block_reason
+      ? `entry bloccata: ${signal.entry_block_reason}`
+      : 'nessuna entry';
+  meta.textContent = `Ultimo segnale ${updated} | close ${closePx} | score ${signal.score || 0}/${signal.min_entry_score || s.config?.min_entry_score || 75} | ${entryState}`;
   if (!conds.length) { el.innerHTML = '<div style="color:var(--txt3);font-size:11px">In attesa di segnale...</div>'; return; }
 
   el.innerHTML = conds.map(c => {
     const ok  = sig === 'buy'  ? c.ok_buy  : sig === 'sell' ? c.ok_sell : false;
     const neu = sig === 'wait';
-    const cls = neu ? 'neu' : ok ? 'ok' : 'no';
+    const blocked = signal.entry_block_reason && ok;
+    const cls = neu ? 'neu' : blocked ? 'neu' : ok ? 'ok' : 'no';
     const ico = neu ? '·' : ok ? '✓' : '✗';
     return `<div class="cond">
-      <div class="cbadge ${cls}">${ico}</div>
+      <div class="cbadge ${cls}">${neu ? '.' : blocked ? '!' : ok ? 'OK' : 'NO'}</div>
       <div class="cn">${c.name}</div>
       <div class="cv">${c.value}</div>
     </div>`;

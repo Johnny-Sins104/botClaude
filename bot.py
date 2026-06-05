@@ -104,6 +104,8 @@ CONFIG: dict[str, Any] = {
     "fee_pct": _env_float("FEE_PCT", 0.001),
     "slippage_pct": _env_float("SLIPPAGE_PCT", 0.0002),
     "max_notional_pct": _env_float("MAX_NOTIONAL_PCT", 0.95),
+    "allow_short": _env_bool("ALLOW_SHORT", "false"),
+    "min_entry_score": _env_int("MIN_ENTRY_SCORE", 75),
     "daily_loss_limit_pct": _env_float("DAILY_LOSS_LIMIT_PCT", 3.0),
     "daily_loss_limit_enabled": _env_bool("DAILY_LOSS_LIMIT_ENABLED", "true"),
     "reconnect_initial_delay_sec": _env_float("RECONNECT_INITIAL_DELAY_SEC", 2.0),
@@ -134,6 +136,8 @@ CONFIG_SCHEMA: dict[str, type] = {
     "fee_pct": float,
     "slippage_pct": float,
     "max_notional_pct": float,
+    "allow_short": bool,
+    "min_entry_score": int,
     "daily_loss_limit_pct": float,
     "daily_loss_limit_enabled": bool,
     "reconnect_initial_delay_sec": float,
@@ -213,6 +217,8 @@ def _validate_config(candidate: dict[str, Any]) -> None:
         raise ValueError("slippage_pct deve essere tra 0 e 0.01")
     if not 0.01 <= candidate["max_notional_pct"] <= 1.0:
         raise ValueError("max_notional_pct deve essere tra 0.01 e 1.0")
+    if not 60 <= candidate["min_entry_score"] <= 100:
+        raise ValueError("min_entry_score deve essere tra 60 e 100")
     if not 0.1 <= candidate["daily_loss_limit_pct"] <= 50:
         raise ValueError("daily_loss_limit_pct deve essere tra 0.1 e 50")
     if not 1 <= candidate["reconnect_initial_delay_sec"] <= 60:
@@ -253,6 +259,7 @@ state: dict[str, Any] = {
     "exchange_order_blocked": True,
     "paper_short_simulation": True,
     "spot_short_live_supported": False,
+    "short_entries_enabled": CONFIG["allow_short"],
     "symbol": CONFIG["symbol"],
     "strategy": CONFIG["strategy"],
     "config": _public_config(),
@@ -290,6 +297,8 @@ state: dict[str, Any] = {
         "daily_loss_limit_hit_time": None,
     },
     "last_signal_candle_time": None,
+    "last_signal_update_time": None,
+    "last_signal_close_price": None,
     "last_closed_candle_time": None,
     "open_position": None,
     "trades": [],
@@ -335,6 +344,7 @@ def _append_error(msg: str) -> None:
 def _sync_state_config() -> None:
     state["strategy"] = CONFIG["strategy"]
     state["symbol"] = CONFIG["symbol"]
+    state["short_entries_enabled"] = CONFIG["allow_short"]
     state["config"] = _public_config()
     _refresh_risk_guard()
 
@@ -426,6 +436,38 @@ def _entry_block_reason() -> Optional[str]:
     if state["risk_guard"].get("daily_loss_limit_hit"):
         return "daily_loss_limit"
     return None
+
+
+def _entry_block_reason_for_signal(signal_type: str, score: int | float = 0) -> Optional[str]:
+    global_block = _entry_block_reason()
+    if global_block:
+        return global_block
+    if signal_type == "sell" and not CONFIG["allow_short"]:
+        return "short_entries_disabled"
+    if signal_type in {"buy", "sell"} and score < CONFIG["min_entry_score"]:
+        return f"score_below_min_entry_score_{CONFIG['min_entry_score']}"
+    return None
+
+
+def _decorate_signal(signal: dict[str, Any], candle_time: Any = None, close_price: Optional[float] = None) -> dict[str, Any]:
+    decorated = deepcopy(signal)
+    score = decorated.get("score", 0) or 0
+    signal_type = decorated.get("type", "wait")
+    block_reason = _entry_block_reason_for_signal(signal_type, score)
+    decorated.update({
+        "strategy": CONFIG["strategy"],
+        "source": "closed_candles_only",
+        "evaluated_at": _now_iso(),
+        "candle_time": candle_time,
+        "close_price": round(close_price, 6) if close_price is not None else None,
+        "min_entry_score": CONFIG["min_entry_score"],
+        "allow_short": CONFIG["allow_short"],
+        "entry_allowed": signal_type in {"buy", "sell"} and block_reason is None,
+        "entry_block_reason": block_reason,
+    })
+    state["last_signal_update_time"] = decorated["evaluated_at"]
+    state["last_signal_close_price"] = decorated["close_price"]
+    return decorated
 
 
 def _coerce_bool_input(value: Any, field: str) -> bool:
@@ -772,15 +814,14 @@ async def open_position(signal: dict[str, Any], signal_price: float, candle_time
         return
     if signal.get("type") not in {"buy", "sell"}:
         return
-    block_reason = _entry_block_reason()
+    block_reason = _entry_block_reason_for_signal(signal.get("type", "wait"), signal.get("score", 0) or 0)
     if block_reason:
         logger.warning(f"Entry bloccata: {block_reason}")
-        state["signal"] = {
-            "type": "wait",
-            "score": 0,
-            "detail": f"Entry bloccata: {block_reason}",
-            "conditions": [],
-        }
+        current_signal = deepcopy(state.get("signal") or signal)
+        current_signal["entry_allowed"] = False
+        current_signal["entry_block_reason"] = block_reason
+        current_signal["detail"] = f"{current_signal.get('detail', 'Segnale rilevato')} | Entry bloccata: {block_reason}"
+        state["signal"] = current_signal
         return
 
     direction = 1 if signal["type"] == "buy" else -1
@@ -994,6 +1035,8 @@ def _save_paper_state() -> None:
                 "fee_pct": CONFIG["fee_pct"],
                 "slippage_pct": CONFIG["slippage_pct"],
                 "max_notional_pct": CONFIG["max_notional_pct"],
+                "allow_short": CONFIG["allow_short"],
+                "min_entry_score": CONFIG["min_entry_score"],
                 "daily_loss_limit_pct": CONFIG["daily_loss_limit_pct"],
                 "daily_loss_limit_enabled": CONFIG["daily_loss_limit_enabled"],
             },
@@ -1046,16 +1089,21 @@ def _load_paper_state() -> None:
         state["kill_switch_time"] = data.get("kill_switch_time", state["kill_switch_time"])
         position = data.get("open_position")
         if isinstance(position, dict) and position.get("direction") in {"LONG", "SHORT"}:
-            state["open_position"] = position
-            state["log"].insert(0, {
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "action": "restore",
-                "direction": position["direction"],
-                "price": position.get("entry_price_fill", position.get("entry", 0)),
-                "pnl": 0,
-                "reason": "RESTORED",
-            })
-            logger.success(f"Posizione paper ripristinata: {position['direction']} @ {position.get('entry_price_fill')}")
+            if position["direction"] == "SHORT" and not CONFIG["allow_short"]:
+                state["open_position"] = None
+                _append_error("SHORT paper salvato ignorato: allow_short=false")
+                logger.warning("SHORT paper salvato ignorato: allow_short=false")
+            else:
+                state["open_position"] = position
+                state["log"].insert(0, {
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "action": "restore",
+                    "direction": position["direction"],
+                    "price": position.get("entry_price_fill", position.get("entry", 0)),
+                    "pnl": 0,
+                    "reason": "RESTORED",
+                })
+                logger.success(f"Posizione paper ripristinata: {position['direction']} @ {position.get('entry_price_fill')}")
     except Exception as exc:
         logger.warning(f"state.json corrotto o non leggibile: {exc}")
         _append_error("state.json corrotto; riparto flat")
@@ -1117,7 +1165,7 @@ async def _handle_closed_candle(kline: dict[str, Any]) -> None:
         return
     state["last_signal_candle_time"] = candle_time
 
-    signal = get_signal()
+    signal = _decorate_signal(get_signal(), candle_time, close_price)
     state["signal"] = signal
 
     prices_list = list(closed_prices)
@@ -1128,8 +1176,8 @@ async def _handle_closed_candle(kline: dict[str, Any]) -> None:
     can_enter = (
         not state["open_position"]
         and not state["trading_halted"]
+        and signal.get("entry_allowed", False)
         and signal["type"] in {"buy", "sell"}
-        and signal["score"] >= 60
         and not whipsaw
         and (
             mtf == "neutral"
@@ -1187,7 +1235,8 @@ async def _stream_klines_once() -> None:
         if closed_prices:
             _update_live_price(closed_prices[-1])
             state["last_closed_candle_time"] = closed_candles[-1]["t"]
-            state["signal"] = get_signal()
+            state["last_signal_candle_time"] = closed_candles[-1]["t"]
+            state["signal"] = _decorate_signal(get_signal(), closed_candles[-1]["t"], closed_prices[-1])
             _update_closed_chart()
 
         kline_1m = socket_manager.kline_socket(symbol=state["symbol"], interval="1m")
