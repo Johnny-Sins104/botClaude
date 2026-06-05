@@ -32,8 +32,8 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
 .last-upd { font-size: 10px; color: var(--txt3); }
 
 /* ── LAYOUT ── */
-.grid-main { display: grid; grid-template-columns: 1fr 320px; gap: 0; height: calc(100vh - 48px); }
-.left  { display: flex; flex-direction: column; gap: 0; overflow-y: auto; padding: 16px; gap: 12px; }
+.grid-main { display: grid; grid-template-columns: 1fr 340px; gap: 0; height: calc(100vh - 48px); }
+.left  { display: flex; flex-direction: column; overflow-y: auto; padding: 16px; gap: 12px; }
 .right { border-left: 1px solid var(--brd); display: flex; flex-direction: column; overflow-y: auto; }
 
 /* ── METRIC CARDS ── */
@@ -104,7 +104,7 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
 /* ── EQUITY CHART ── */
 .equity-wrap { position: relative; height: 80px; }
 
-/* ── ERRORS ── */
+/* ── ERRORS / SAFETY ── */
 .err-box { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #fca5a5; }
 .guard-card { background: var(--bg2); border: 1px solid var(--brd); border-radius: 8px; padding: 12px; }
 .guard-card.halted { border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.08); }
@@ -115,10 +115,32 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
 .guard-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--txt2); margin-top: 5px; }
 .guard-row span:last-child { color: var(--txt); text-align: right; }
 .ks-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
-.ks-actions button { border: 1px solid var(--brd); border-radius: 6px; padding: 7px 8px; font: inherit; font-size: 11px; cursor: pointer; color: var(--txt); background: var(--bg3); }
-.ks-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.ks-actions button, .cfg-actions button { border: 1px solid var(--brd); border-radius: 6px; padding: 7px 8px; font: inherit; font-size: 11px; cursor: pointer; color: var(--txt); background: var(--bg3); }
+.ks-actions button:disabled, .cfg-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .ks-actions .danger { background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.5); color: #fca5a5; }
-.ks-actions .neutral { background: rgba(139,143,153,.14); }
+.ks-actions .neutral, .cfg-actions .neutral { background: rgba(139,143,153,.14); }
+.cfg-actions .primary { background: rgba(59,130,246,.18); border-color: rgba(59,130,246,.45); color: #bfdbfe; }
+
+/* ── CONFIG PANEL ── */
+.cfg-card { background: var(--bg2); border: 1px solid var(--brd); border-radius: 8px; padding: 12px; }
+.cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cfg-field { display: flex; flex-direction: column; gap: 4px; }
+.cfg-field.full { grid-column: 1 / -1; }
+.cfg-field label { font-size: 10px; color: var(--txt3); text-transform: uppercase; letter-spacing: .05em; }
+.cfg-field input, .cfg-field select { width: 100%; border: 1px solid var(--brd); border-radius: 6px; background: var(--bg1); color: var(--txt); font: inherit; font-size: 11px; padding: 7px 8px; outline: none; }
+.cfg-field input:disabled, .cfg-field select:disabled { opacity: .55; cursor: not-allowed; }
+.cfg-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; margin-top: 8px; }
+.cfg-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--txt2); }
+.cfg-check input { accent-color: var(--blue); }
+.cfg-group { display: none; margin-top: 10px; border-top: 1px solid var(--brd); padding-top: 10px; }
+.cfg-group.active { display: block; }
+.cfg-subtitle { font-size: 10px; color: var(--txt3); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+.cfg-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.cfg-msg { font-size: 11px; line-height: 1.45; margin-top: 9px; min-height: 16px; color: var(--txt3); }
+.cfg-msg.ok { color: var(--green); }
+.cfg-msg.err { color: #fca5a5; }
+.cfg-warning { display: none; margin-bottom: 9px; border: 1px solid rgba(245,158,11,.35); background: rgba(245,158,11,.09); color: #fcd34d; border-radius: 6px; padding: 8px; font-size: 11px; line-height: 1.45; }
+.cfg-warning.show { display: block; }
 
 /* ── RESPONSIVE ── */
 @media (max-width: 900px) {
@@ -126,7 +148,10 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
   .right { border-left: none; border-top: 1px solid var(--brd); }
   .metrics { grid-template-columns: repeat(3, 1fr); }
 }
-@media (max-width: 540px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 540px) {
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .cfg-grid, .cfg-checks { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -212,6 +237,77 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
     </div>
 
     <div class="rp-section">
+      <div class="rp-title">Config Strategia</div>
+      <div class="cfg-card">
+        <div class="cfg-warning" id="cfg-open-warning">Posizione aperta: evita modifiche operative fino alla chiusura.</div>
+        <div class="cfg-grid">
+          <div class="cfg-field full">
+            <label for="cfg-strategy">Strategia</label>
+            <select id="cfg-strategy" data-cfg-input>
+              <option value="ema">ema</option>
+              <option value="bb">bb</option>
+              <option value="macd">macd</option>
+              <option value="ichi">ichi</option>
+            </select>
+          </div>
+          <div class="cfg-field"><label for="cfg-risk_pct">Risk %</label><input id="cfg-risk_pct" type="number" min="0.1" max="2" step="0.1" data-cfg-input></div>
+          <div class="cfg-field"><label for="cfg-tp_ratio">TP ratio</label><input id="cfg-tp_ratio" type="number" min="0.5" max="10" step="0.1" data-cfg-input></div>
+          <div class="cfg-field"><label for="cfg-sl_atr_mult">SL ATR</label><input id="cfg-sl_atr_mult" type="number" min="0.2" max="10" step="0.1" data-cfg-input></div>
+          <div class="cfg-field"><label for="cfg-max_notional_pct">Max notional</label><input id="cfg-max_notional_pct" type="number" min="0.01" max="1" step="0.01" data-cfg-input></div>
+          <div class="cfg-field full"><label for="cfg-min_entry_score">Min entry score</label><input id="cfg-min_entry_score" type="number" min="60" max="100" step="5" data-cfg-input></div>
+        </div>
+
+        <div class="cfg-checks">
+          <label class="cfg-check"><input id="cfg-allow_short" type="checkbox" data-cfg-input> Allow short</label>
+          <label class="cfg-check"><input id="cfg-trailing_stop" type="checkbox" data-cfg-input> Trailing</label>
+          <label class="cfg-check"><input id="cfg-whipsaw_filter" type="checkbox" data-cfg-input> Whipsaw</label>
+          <label class="cfg-check"><input id="cfg-mtf_filter" type="checkbox" data-cfg-input> MTF</label>
+        </div>
+
+        <div class="cfg-group" id="cfg-group-ema">
+          <div class="cfg-subtitle">Parametri EMA</div>
+          <div class="cfg-grid">
+            <div class="cfg-field"><label for="cfg-ema_fast">EMA fast</label><input id="cfg-ema_fast" type="number" min="2" max="299" step="1" data-cfg-input></div>
+            <div class="cfg-field"><label for="cfg-ema_slow">EMA slow</label><input id="cfg-ema_slow" type="number" min="3" max="300" step="1" data-cfg-input></div>
+            <div class="cfg-field full"><label for="cfg-rsi_period">RSI period</label><input id="cfg-rsi_period" type="number" min="2" max="100" step="1" data-cfg-input></div>
+          </div>
+        </div>
+
+        <div class="cfg-group" id="cfg-group-bb">
+          <div class="cfg-subtitle">Parametri Bollinger Bands</div>
+          <div class="cfg-grid">
+            <div class="cfg-field"><label for="cfg-bb_period">BB period</label><input id="cfg-bb_period" type="number" min="5" max="300" step="1" data-cfg-input></div>
+            <div class="cfg-field"><label for="cfg-bb_dev">BB dev</label><input id="cfg-bb_dev" type="number" min="0.5" max="5" step="0.1" data-cfg-input></div>
+          </div>
+        </div>
+
+        <div class="cfg-group" id="cfg-group-macd">
+          <div class="cfg-subtitle">Parametri MACD</div>
+          <div class="cfg-grid">
+            <div class="cfg-field"><label for="cfg-macd_fast">MACD fast</label><input id="cfg-macd_fast" type="number" min="2" max="99" step="1" data-cfg-input></div>
+            <div class="cfg-field"><label for="cfg-macd_slow">MACD slow</label><input id="cfg-macd_slow" type="number" min="3" max="300" step="1" data-cfg-input></div>
+            <div class="cfg-field full"><label for="cfg-macd_sig">MACD sig</label><input id="cfg-macd_sig" type="number" min="2" max="100" step="1" data-cfg-input></div>
+          </div>
+        </div>
+
+        <div class="cfg-group" id="cfg-group-ichi">
+          <div class="cfg-subtitle">Parametri Ichimoku</div>
+          <div class="cfg-grid">
+            <div class="cfg-field"><label for="cfg-ichi_t">Ichi T</label><input id="cfg-ichi_t" type="number" min="2" max="100" step="1" data-cfg-input></div>
+            <div class="cfg-field"><label for="cfg-ichi_k">Ichi K</label><input id="cfg-ichi_k" type="number" min="3" max="200" step="1" data-cfg-input></div>
+            <div class="cfg-field full"><label for="cfg-ichi_s">Ichi S</label><input id="cfg-ichi_s" type="number" min="4" max="300" step="1" data-cfg-input></div>
+          </div>
+        </div>
+
+        <div class="cfg-actions">
+          <button class="primary" id="cfg-apply-btn" onclick="applyConfig()">Applica configurazione</button>
+          <button class="neutral" id="cfg-reload-btn" onclick="reloadConfigFromState()">Ricarica valori attuali</button>
+        </div>
+        <div class="cfg-msg" id="cfg-msg"></div>
+      </div>
+    </div>
+
+    <div class="rp-section">
       <div class="rp-title">Posizione aperta</div>
       <div id="pos-panel"><div class="no-pos">Nessuna posizione</div></div>
     </div>
@@ -236,10 +332,11 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
 
 <script>
 const API = window.location.origin + '/api/state';
+const CONFIG_API = window.location.origin + '/api/config';
 const KILL_API = window.location.origin + '/api/kill-switch';
 let pChart, eqChart;
-let priceHistory = [], eqHistory = [];
-let lastTs = null;
+let cfgLoaded = false;
+let latestState = null;
 
 // ── INIT CHARTS ────────────────────────────────────────────────────────────────
 function initCharts() {
@@ -276,15 +373,24 @@ function initCharts() {
 }
 
 // ── HELPERS ────────────────────────────────────────────────────────────────────
-function fmt(n, d = 2) { return Number(n).toFixed(d); }
+function fmt(n, d = 2) { return Number(n || 0).toFixed(d); }
 function fp(n) {
-  n = Number(n);
+  n = Number(n || 0);
   return n > 1000 ? n.toFixed(2) : n > 10 ? n.toFixed(4) : n.toFixed(6);
 }
 function pnlClass(v) { return Number(v) >= 0 ? 'g' : 'r'; }
+function el(id) { return document.getElementById(id); }
 
 const STRAT_LABELS = { ema: 'EMA+RSI+VWAP', bb: 'Bollinger Bands', macd: 'MACD', ichi: 'Ichimoku' };
 const STRAT_COLORS = { ema: '#3b82f6', bb: '#f59e0b', macd: '#22c55e', ichi: '#a855f7' };
+const STRATEGY_FIELDS = {
+  ema: ['ema_fast', 'ema_slow', 'rsi_period'],
+  bb: ['bb_period', 'bb_dev'],
+  macd: ['macd_fast', 'macd_slow', 'macd_sig'],
+  ichi: ['ichi_t', 'ichi_k', 'ichi_s'],
+};
+const GENERAL_CFG_FIELDS = ['risk_pct', 'tp_ratio', 'sl_atr_mult', 'max_notional_pct', 'min_entry_score'];
+const CHECK_CFG_FIELDS = ['allow_short', 'trailing_stop', 'whipsaw_filter', 'mtf_filter'];
 
 function strategyParamsText(s) {
   const p = s.strategy_params || {};
@@ -292,6 +398,105 @@ function strategyParamsText(s) {
   if (s.strategy === 'macd') return `MACD ${p.MACD_FAST || 12}/${p.MACD_SLOW || 26}/${p.MACD_SIG || 9}`;
   if (s.strategy === 'ichi') return `ICHI ${p.ICHI_T || 9}/${p.ICHI_K || 26}/${p.ICHI_S || 52}`;
   return `EMA ${p.EMA_FAST || 9}/${p.EMA_SLOW || 21}`;
+}
+
+// ── CONFIG PANEL ───────────────────────────────────────────────────────────────
+function cfgInput(name) { return el('cfg-' + name); }
+function cfgNumber(name) { return Number(cfgInput(name).value); }
+function cfgSetMessage(text, kind = '') {
+  const node = el('cfg-msg');
+  node.textContent = text || '';
+  node.className = 'cfg-msg ' + kind;
+}
+function showConfigGroup(strategy) {
+  ['ema', 'bb', 'macd', 'ichi'].forEach(name => {
+    el('cfg-group-' + name).classList.toggle('active', name === strategy);
+  });
+}
+function populateConfigPanel(config) {
+  if (!config) return;
+  el('cfg-strategy').value = config.strategy || 'ema';
+  [...GENERAL_CFG_FIELDS, ...Object.values(STRATEGY_FIELDS).flat()].forEach(name => {
+    const input = cfgInput(name);
+    if (input && config[name] !== undefined && config[name] !== null) input.value = config[name];
+  });
+  CHECK_CFG_FIELDS.forEach(name => {
+    const input = cfgInput(name);
+    if (input) input.checked = Boolean(config[name]);
+  });
+  showConfigGroup(el('cfg-strategy').value);
+  cfgLoaded = true;
+}
+function setConfigDisabled(openPosition) {
+  const disabled = Boolean(openPosition);
+  document.querySelectorAll('[data-cfg-input]').forEach(input => { input.disabled = disabled; });
+  el('cfg-apply-btn').disabled = disabled;
+  el('cfg-reload-btn').disabled = false;
+  el('cfg-open-warning').classList.toggle('show', disabled);
+}
+function reloadConfigFromState() {
+  if (latestState && latestState.config) {
+    populateConfigPanel(latestState.config);
+    cfgSetMessage('Valori correnti ricaricati', 'ok');
+  } else {
+    cfgSetMessage('Stato non ancora disponibile', 'err');
+  }
+}
+function validateRange(name) {
+  const input = cfgInput(name);
+  if (!input) return null;
+  const value = Number(input.value);
+  const min = input.min === '' ? -Infinity : Number(input.min);
+  const max = input.max === '' ? Infinity : Number(input.max);
+  if (!Number.isFinite(value)) return `${name} non valido`;
+  if (value < min || value > max) return `${name} fuori range (${min} - ${max})`;
+  return null;
+}
+function validateConfigPayload(strategy) {
+  const fields = [...GENERAL_CFG_FIELDS, ...(STRATEGY_FIELDS[strategy] || [])];
+  for (const name of fields) {
+    const err = validateRange(name);
+    if (err) return err;
+  }
+  if (strategy === 'ema' && !(cfgNumber('ema_fast') < cfgNumber('ema_slow'))) return 'ema_fast deve essere minore di ema_slow';
+  if (strategy === 'macd' && !(cfgNumber('macd_fast') < cfgNumber('macd_slow'))) return 'macd_fast deve essere minore di macd_slow';
+  if (strategy === 'ichi' && !(cfgNumber('ichi_t') < cfgNumber('ichi_k') && cfgNumber('ichi_k') < cfgNumber('ichi_s'))) return 'ichi_t < ichi_k < ichi_s non rispettato';
+  return null;
+}
+function buildConfigPayload() {
+  const strategy = el('cfg-strategy').value;
+  const payload = { strategy };
+  GENERAL_CFG_FIELDS.forEach(name => { payload[name] = cfgNumber(name); });
+  CHECK_CFG_FIELDS.forEach(name => { payload[name] = cfgInput(name).checked; });
+  (STRATEGY_FIELDS[strategy] || []).forEach(name => { payload[name] = cfgNumber(name); });
+  return payload;
+}
+async function applyConfig() {
+  if (latestState && latestState.open_position) {
+    cfgSetMessage('Posizione aperta: modifiche operative bloccate fino alla chiusura', 'err');
+    return;
+  }
+  const strategy = el('cfg-strategy').value;
+  const validationError = validateConfigPayload(strategy);
+  if (validationError) {
+    cfgSetMessage(validationError, 'err');
+    return;
+  }
+  const payload = buildConfigPayload();
+  try {
+    const res = await fetch(CONFIG_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Configurazione rifiutata');
+    cfgSetMessage('Config aggiornata', 'ok');
+    if (data.config) populateConfigPanel(data.config);
+    await poll();
+  } catch (err) {
+    cfgSetMessage(err.message || String(err), 'err');
+  }
 }
 
 // ── UPDATE FUNCTIONS ───────────────────────────────────────────────────────────
@@ -444,7 +649,6 @@ function updateConditions(s) {
     const neu = sig === 'wait';
     const blocked = signal.entry_block_reason && ok;
     const cls = neu ? 'neu' : blocked ? 'neu' : ok ? 'ok' : 'no';
-    const ico = neu ? '·' : ok ? '✓' : '✗';
     return `<div class="cond">
       <div class="cbadge ${cls}">${neu ? '.' : blocked ? '!' : ok ? 'OK' : 'NO'}</div>
       <div class="cn">${c.name}</div>
@@ -496,7 +700,6 @@ function updateChartData(s) {
   pChart.data.labels = labels;
   pChart.data.datasets[0].data = closes;
 
-  // Linee indicatori sul grafico
   const len = closes.length;
   if (strat === 'ema') {
     pChart.data.datasets[1].data = new Array(len).fill(inds.ema_fast || null);
@@ -517,7 +720,6 @@ function updateChartData(s) {
   }
   pChart.update('none');
 
-  // Equity
   const eq = s.equity_curve || [];
   eqChart.data.labels = eq.map((_, i) => i);
   eqChart.data.datasets[0].data = eq;
@@ -551,7 +753,6 @@ function updateErrors(s) {
   el.innerHTML = `<div class="err-box">⚠ ${last.time ? new Date(last.time).toLocaleTimeString('it-IT') + ' — ' : ''}${last.msg}</div>`;
 }
 
-// ── POLLING LOOP ───────────────────────────────────────────────────────────────
 function updateSafety(s) {
   const guard = s.risk_guard || {};
   const halted = Boolean(s.trading_halted);
@@ -613,6 +814,7 @@ async function poll() {
   try {
     const res  = await fetch(API, { cache: 'no-store' });
     const data = await res.json();
+    latestState = data;
 
     const dot = document.getElementById('conn-dot');
     const txt = document.getElementById('conn-txt');
@@ -628,6 +830,9 @@ async function poll() {
       document.getElementById('last-upd').textContent =
         'Aggiornato ' + new Date(shownUpdate).toLocaleTimeString('it-IT');
     }
+
+    if (!cfgLoaded && data.config) populateConfigPanel(data.config);
+    setConfigDisabled(Boolean(data.open_position));
 
     updateTopbar(data);
     updateMetrics(data);
@@ -647,6 +852,8 @@ async function poll() {
     document.getElementById('conn-txt').textContent = 'Impossibile raggiungere il bot';
   }
 }
+
+el('cfg-strategy').addEventListener('change', (event) => showConfigGroup(event.target.value));
 
 initCharts();
 poll();
