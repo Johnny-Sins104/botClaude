@@ -117,6 +117,7 @@ CONFIG: dict[str, Any] = {
     "auto_strategy_min_score": _env_int("AUTO_STRATEGY_MIN_SCORE", 60),
     "auto_strategy_cooldown_candles": _env_int("AUTO_STRATEGY_COOLDOWN_CANDLES", 3),
     "auto_strategy_fallback": _env_str("AUTO_STRATEGY_FALLBACK", _env_str("STRATEGY", "ema")).lower(),
+    "post_sl_cooldown_candles": _env_int("POST_SL_COOLDOWN_CANDLES", 5),
 }
 
 CONFIG_SCHEMA: dict[str, type] = {
@@ -128,6 +129,7 @@ CONFIG_SCHEMA: dict[str, type] = {
     "reconnect_initial_delay_sec": float, "reconnect_max_delay_sec": float, "trailing_stop": bool,
     "whipsaw_filter": bool, "mtf_filter": bool, "auto_strategy_selector": bool,
     "auto_strategy_min_score": int, "auto_strategy_cooldown_candles": int, "auto_strategy_fallback": str,
+    "post_sl_cooldown_candles": int,
 }
 CONFIG_KEY_ALIASES = {"bb_mult": "bb_dev", "macd_signal": "macd_sig", "ichi_tenkan": "ichi_t", "ichi_kijun": "ichi_k", "ichi_senkou_b": "ichi_s"}
 
@@ -203,6 +205,8 @@ def _validate_config(candidate: dict[str, Any]) -> None:
         raise ValueError("auto_strategy_min_score deve essere tra 0 e 100")
     if not 0 <= candidate["auto_strategy_cooldown_candles"] <= 20:
         raise ValueError("auto_strategy_cooldown_candles deve essere tra 0 e 20")
+    if not 0 <= candidate["post_sl_cooldown_candles"] <= 60:
+        raise ValueError("post_sl_cooldown_candles deve essere tra 0 e 60")
     if not 0.1 <= candidate["daily_loss_limit_pct"] <= 50:
         raise ValueError("daily_loss_limit_pct deve essere tra 0.1 e 50")
     if not 1 <= candidate["reconnect_initial_delay_sec"] <= 60 or not 2 <= candidate["reconnect_max_delay_sec"] <= 300:
@@ -236,7 +240,7 @@ def _public_config() -> dict[str, Any]:
 
 
 def _strategy_env_params() -> dict[str, Any]:
-    return {"EMA_FAST": CONFIG["ema_fast"], "EMA_SLOW": CONFIG["ema_slow"], "BB_PERIOD": CONFIG["bb_period"], "BB_DEV": CONFIG["bb_dev"], "MACD_FAST": CONFIG["macd_fast"], "MACD_SLOW": CONFIG["macd_slow"], "MACD_SIG": CONFIG["macd_sig"], "ICHI_T": CONFIG["ichi_t"], "ICHI_K": CONFIG["ichi_k"], "ICHI_S": CONFIG["ichi_s"], "AUTO_STRATEGY_SELECTOR": CONFIG["auto_strategy_selector"], "AUTO_STRATEGY_MIN_SCORE": CONFIG["auto_strategy_min_score"], "AUTO_STRATEGY_COOLDOWN_CANDLES": CONFIG["auto_strategy_cooldown_candles"], "AUTO_STRATEGY_FALLBACK": CONFIG["auto_strategy_fallback"]}
+    return {"EMA_FAST": CONFIG["ema_fast"], "EMA_SLOW": CONFIG["ema_slow"], "BB_PERIOD": CONFIG["bb_period"], "BB_DEV": CONFIG["bb_dev"], "MACD_FAST": CONFIG["macd_fast"], "MACD_SLOW": CONFIG["macd_slow"], "MACD_SIG": CONFIG["macd_sig"], "ICHI_T": CONFIG["ichi_t"], "ICHI_K": CONFIG["ichi_k"], "ICHI_S": CONFIG["ichi_s"], "AUTO_STRATEGY_SELECTOR": CONFIG["auto_strategy_selector"], "AUTO_STRATEGY_MIN_SCORE": CONFIG["auto_strategy_min_score"], "AUTO_STRATEGY_COOLDOWN_CANDLES": CONFIG["auto_strategy_cooldown_candles"], "AUTO_STRATEGY_FALLBACK": CONFIG["auto_strategy_fallback"], "POST_SL_COOLDOWN_CANDLES": CONFIG["post_sl_cooldown_candles"]}
 
 
 def _selector_state(active: str) -> dict[str, Any]:
@@ -245,9 +249,9 @@ def _selector_state(active: str) -> dict[str, Any]:
 
 initial_active_strategy = CONFIG["strategy"]
 state: dict[str, Any] = {
-    "running": False, "paper_mode": True, "paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "paper_short_simulation": True, "spot_short_live_supported": False, "short_entries_enabled": CONFIG["allow_short"], "symbol": CONFIG["symbol"], "strategy": initial_active_strategy, "config": _public_config(), "capital": CONFIG["capital"], "init_capital": CONFIG["capital"], "price": 0.0, "last_live_price": 0.0, "price_change": 0.0, "last_price_update_time": None, "price_source": "binance_websocket_live", "signal_data_source": "closed_candles_only", "strategy_source": "manual_or_auto_selector", "strategy_params": _strategy_env_params(), "websocket_status": "stopped", "websocket_connected_at": None, "reconnect_count": 0, "reconnect_delay_sec": 0, "last_reconnect_time": None, "next_reconnect_time": None, "last_websocket_error": None, "historical_bootstrap_status": "pending", "historical_candles_loaded_1m": 0, "historical_candles_loaded_5m": 0, "historical_bootstrap_error": None, "shutdown_requested": False, "kill_switch_active": False, "kill_switch_reason": None, "kill_switch_time": None, "trading_halted": False, "trading_halt_reason": None,
+    "running": False, "paper_mode": True, "paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "paper_short_simulation": True, "spot_short_live_supported": False, "short_entries_enabled": CONFIG["allow_short"], "symbol": CONFIG["symbol"], "strategy": initial_active_strategy, "config": _public_config(), "capital": CONFIG["capital"], "init_capital": CONFIG["capital"], "price": 0.0, "last_live_price": 0.0, "price_change": 0.0, "last_price_update_time": None, "price_source": "binance_websocket_live", "signal_data_source": "closed_candles_only", "strategy_source": "manual_or_auto_selector", "strategy_params": _strategy_env_params(), "websocket_status": "stopped", "websocket_connected_at": None, "reconnect_count": 0, "reconnect_delay_sec": 0, "last_reconnect_time": None, "next_reconnect_time": None, "last_websocket_error": None, "historical_bootstrap_status": "pending", "historical_candles_loaded_1m": 0, "historical_candles_loaded_5m": 0, "historical_bootstrap_error": None, "shutdown_requested": False, "entry_cooldowns": {"buy": 0, "sell": 0}, "last_sl_direction": None, "last_sl_time": None, "kill_switch_active": False, "kill_switch_reason": None, "kill_switch_time": None, "trading_halted": False, "trading_halt_reason": None,
     "risk_guard": {"daily_date": _today_str(), "daily_start_capital": CONFIG["capital"], "daily_realized_pnl": 0.0, "daily_unrealized_pnl": 0.0, "daily_total_pnl": 0.0, "daily_loss_limit_pct": CONFIG["daily_loss_limit_pct"], "daily_loss_limit_amount": round(CONFIG["capital"] * CONFIG["daily_loss_limit_pct"] / 100, 6), "daily_loss_limit_enabled": CONFIG["daily_loss_limit_enabled"], "daily_loss_limit_hit": False, "daily_loss_limit_hit_time": None},
-    "last_signal_candle_time": None, "last_signal_update_time": None, "last_signal_close_price": None, "last_closed_candle_time": None, "open_position": None, "trades": [], "metrics": {"total_pnl": 0.0, "total_pnl_pct": 0.0, "trades": 0, "wins": 0, "win_rate": 0.0, "max_dd": 0.0, "peak_capital": CONFIG["capital"]}, "indicators": {}, "signal": {"type": "wait", "score": 0, "detail": "Bot in attesa di bootstrap candele storiche", "conditions": []}, "candles": [], "equity_curve": [CONFIG["capital"]], "log": [], "errors": [], "last_update": None, "filters": {"whipsaw": False, "mtf_trend": "neutral"}, **_selector_state(initial_active_strategy),
+    "last_signal_candle_time": None, "last_signal_update_time": None, "last_signal_close_price": None, "last_closed_candle_time": None, "last_monitor_log_candle_time": None, "open_position": None, "trades": [], "metrics": {"total_pnl": 0.0, "total_pnl_pct": 0.0, "trades": 0, "wins": 0, "win_rate": 0.0, "max_dd": 0.0, "peak_capital": CONFIG["capital"]}, "indicators": {}, "signal": {"type": "wait", "score": 0, "detail": "Bot in attesa di bootstrap candele storiche", "conditions": []}, "candles": [], "equity_curve": [CONFIG["capital"]], "log": [], "errors": [], "last_update": None, "filters": {"whipsaw": False, "mtf_trend": "neutral"}, **_selector_state(initial_active_strategy),
 }
 
 closed_prices: deque[float] = deque(maxlen=MAX_CANDLES)
@@ -321,6 +325,11 @@ def _sync_state_config() -> None:
     _refresh_risk_guard()
 
 
+def _tick_entry_cooldowns() -> None:
+    for side in ("buy", "sell"):
+        state["entry_cooldowns"][side] = max(0, int(state["entry_cooldowns"].get(side, 0)) - 1)
+
+
 def _entry_block_reason() -> Optional[str]:
     _refresh_risk_guard()
     if state["kill_switch_active"]:
@@ -334,6 +343,10 @@ def _entry_block_reason_for_signal(signal_type: str, score: int | float = 0) -> 
     block = _entry_block_reason()
     if block:
         return block
+    if signal_type in {"buy", "sell"} and state.get("open_position"):
+        return "position_already_open"
+    if signal_type in {"buy", "sell"} and int(state["entry_cooldowns"].get(signal_type, 0)) > 0:
+        return f"post_sl_cooldown_{signal_type}_{state['entry_cooldowns'][signal_type]}_candles"
     if signal_type == "sell" and not CONFIG["allow_short"]:
         return "short_entries_disabled"
     if signal_type in {"buy", "sell"} and score < CONFIG["min_entry_score"]:
@@ -347,7 +360,7 @@ def _decorate_signal(signal: dict[str, Any], candle_time: Any = None, close_pric
     score = decorated.get("score", 0) or 0
     signal_type = decorated.get("type", "wait")
     block_reason = _entry_block_reason_for_signal(signal_type, score)
-    decorated.update({"strategy": active, "active_strategy": active, "fallback_strategy": CONFIG["auto_strategy_fallback"], "market_regime": state.get("market_regime"), "strategy_selector_reason": state.get("strategy_selector_reason"), "strategy_scores": state.get("strategy_scores"), "source": "closed_candles_only", "evaluated_at": _now_iso(), "candle_time": candle_time, "close_price": round(close_price, 6) if close_price is not None else None, "min_entry_score": CONFIG["min_entry_score"], "allow_short": CONFIG["allow_short"], "entry_allowed": signal_type in {"buy", "sell"} and block_reason is None, "entry_block_reason": block_reason})
+    decorated.update({"strategy": active, "active_strategy": active, "fallback_strategy": CONFIG["auto_strategy_fallback"], "market_regime": state.get("market_regime"), "strategy_selector_reason": state.get("strategy_selector_reason"), "strategy_scores": state.get("strategy_scores"), "source": "closed_candles_only", "evaluated_at": _now_iso(), "candle_time": candle_time, "close_price": round(close_price, 6) if close_price is not None else None, "min_entry_score": CONFIG["min_entry_score"], "allow_short": CONFIG["allow_short"], "entry_allowed": signal_type in {"buy", "sell"} and block_reason is None, "entry_block_reason": block_reason, "entry_cooldowns": deepcopy(state.get("entry_cooldowns", {}))})
     state["last_signal_update_time"] = decorated["evaluated_at"]
     state["last_signal_close_price"] = decorated["close_price"]
     return decorated
@@ -513,6 +526,27 @@ def _ichimoku_values() -> Optional[dict[str, float]]:
     return {"tenkan": tenkan, "kijun": kijun, "span_a": (tenkan + kijun) / 2, "span_b": mid(CONFIG["ichi_s"])}
 
 
+
+def _recent_rebound_risk(direction: str) -> tuple[bool, str]:
+    candles = list(closed_candles)[-3:]
+    if len(candles) < 3:
+        return False, "not_enough_recent_candles"
+    closes = [c["c"] for c in candles]
+    rising = closes[0] < closes[1] < closes[2]
+    falling = closes[0] > closes[1] > closes[2]
+    snap = _macd_snapshot(list(closed_prices))
+    if direction == "sell":
+        if rising:
+            return True, "last_3_closes_rebounding_against_short"
+        if snap and snap["hist_cur"] > snap["hist_prev"]:
+            return True, "macd_histogram_improving_against_short"
+    if direction == "buy":
+        if falling:
+            return True, "last_3_closes_dumping_against_long"
+        if snap and snap["hist_cur"] < snap["hist_prev"]:
+            return True, "macd_histogram_worsening_against_long"
+    return False, "ok"
+
 def signal_ichi() -> dict[str, Any]:
     vals = _ichimoku_values(); prices, _ = _pv()
     if not vals or not prices:
@@ -521,10 +555,18 @@ def signal_ichi() -> dict[str, Any]:
     cond = [{"name": "Prezzo sopra/sotto Kumo", "ok_buy": close > top, "ok_sell": close < bottom, "value": f"{close:.2f} / cloud {bottom:.2f}-{top:.2f}"}, {"name": "Tenkan/Kijun", "ok_buy": vals["tenkan"] > vals["kijun"], "ok_sell": vals["tenkan"] < vals["kijun"], "value": f"{vals['tenkan']:.2f}/{vals['kijun']:.2f}"}, {"name": "Colore cloud", "ok_buy": vals["span_a"] > vals["span_b"], "ok_sell": vals["span_a"] < vals["span_b"], "value": f"{vals['span_a']:.2f}/{vals['span_b']:.2f}"}]
     state["indicators"] = vals
     buy = sum(1 for c in cond if c["ok_buy"]); sell = sum(1 for c in cond if c["ok_sell"])
-    if buy >= 2:
-        return {"type": "buy", "score": buy * 30, "detail": "Ichimoku bullish", "conditions": cond}
     if sell >= 2:
+        risk, why = _recent_rebound_risk("sell")
+        if risk:
+            cond.append({"name": "Anti-late short", "ok_buy": False, "ok_sell": False, "value": why})
+            return {"type": "wait", "score": 0, "detail": f"Ichimoku bearish ma entry short in ritardo: {why}", "conditions": cond}
         return {"type": "sell", "score": sell * 30, "detail": "Ichimoku bearish", "conditions": cond}
+    if buy >= 2:
+        risk, why = _recent_rebound_risk("buy")
+        if risk:
+            cond.append({"name": "Anti-late long", "ok_buy": False, "ok_sell": False, "value": why})
+            return {"type": "wait", "score": 0, "detail": f"Ichimoku bullish ma entry long in ritardo: {why}", "conditions": cond}
+        return {"type": "buy", "score": buy * 30, "detail": "Ichimoku bullish", "conditions": cond}
     return {"type": "wait", "score": 0, "detail": "Ichimoku non chiaro", "conditions": cond}
 
 
@@ -656,6 +698,11 @@ async def close_position(signal_price: float, reason: str) -> None:
     if not pos:
         return
     pnl = _position_pnl(pos, signal_price); state["capital"] += pnl["pnl_net"]
+    if reason == "SL":
+        side = "buy" if pos["dir"] == 1 else "sell"
+        state["entry_cooldowns"][side] = CONFIG["post_sl_cooldown_candles"]
+        state["last_sl_direction"] = pos["direction"]
+        state["last_sl_time"] = _now_iso()
     m = state["metrics"]; m["trades"] += 1; m["wins"] += 1 if pnl["pnl_net"] > 0 else 0; m["total_pnl"] = state["capital"] - state["init_capital"]; m["total_pnl_pct"] = m["total_pnl"] / state["init_capital"] * 100; m["win_rate"] = m["wins"] / m["trades"] * 100 if m["trades"] else 0; m["peak_capital"] = max(m["peak_capital"], state["capital"]); m["max_dd"] = max(m["max_dd"], (m["peak_capital"] - state["capital"]) / m["peak_capital"] * 100)
     state["equity_curve"].append(round(state["capital"], 2)); state["equity_curve"] = state["equity_curve"][-500:]
     trade = {"time": _now_iso(), "direction": pos["direction"], "entry": pos["entry_price_fill"], "exit": round(pnl["exit_fill"], 6), "size": pos["size"], "reason": reason, "strategy": pos["strategy"], "market_regime": pos.get("market_regime"), "strategy_selector_reason": pos.get("strategy_selector_reason"), "entry_price_signal": pos["entry_price_signal"], "entry_price_fill": pos["entry_price_fill"], "exit_price_signal": round(signal_price, 6), "exit_price_fill": round(pnl["exit_fill"], 6), "fee_entry": round(pos["fee_entry"], 8), "fee_exit": round(pnl["fee_exit"], 8), "fee_total": round(pnl["fee_total"], 8), "slippage_pct": pos["slippage_pct"], "fee_pct": pos["fee_pct"], "pnl_gross": round(pnl["pnl_gross"], 4), "pnl_net": round(pnl["pnl_net"], 4), "pnl": round(pnl["pnl_net"], 4), "risk_amount": pos["risk_amount"], "notional": pos["notional"], "size_by_risk": pos["size_by_risk"], "size_by_capital": pos["size_by_capital"], "final_size": pos["final_size"], "max_notional_pct": pos["max_notional_pct"]}
@@ -674,7 +721,7 @@ def _save_trades_json() -> None:
 
 def _save_paper_state() -> None:
     try:
-        data = {"paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "symbol": state["symbol"], "strategy": state["strategy"], "active_strategy": state["active_strategy"], "fallback_strategy": state["fallback_strategy"], "market_regime": state["market_regime"], "strategy_selector_reason": state["strategy_selector_reason"], "strategy_scores": state["strategy_scores"], "capital": state["capital"], "last_update": _now_iso(), "kill_switch_active": state["kill_switch_active"], "kill_switch_reason": state["kill_switch_reason"], "kill_switch_time": state["kill_switch_time"], "trading_halted": state["trading_halted"], "trading_halt_reason": state["trading_halt_reason"], "risk_guard": state["risk_guard"], "strategy_params": _strategy_env_params(), "config": _public_config(), "open_position": state["open_position"]}
+        data = {"paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "symbol": state["symbol"], "strategy": state["strategy"], "active_strategy": state["active_strategy"], "fallback_strategy": state["fallback_strategy"], "market_regime": state["market_regime"], "strategy_selector_reason": state["strategy_selector_reason"], "strategy_scores": state["strategy_scores"], "entry_cooldowns": state["entry_cooldowns"], "last_sl_direction": state["last_sl_direction"], "last_sl_time": state["last_sl_time"], "capital": state["capital"], "last_update": _now_iso(), "kill_switch_active": state["kill_switch_active"], "kill_switch_reason": state["kill_switch_reason"], "kill_switch_time": state["kill_switch_time"], "trading_halted": state["trading_halted"], "trading_halt_reason": state["trading_halt_reason"], "risk_guard": state["risk_guard"], "strategy_params": _strategy_env_params(), "config": _public_config(), "open_position": state["open_position"]}
         tmp = STATE_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"); tmp.replace(STATE_FILE)
     except Exception as exc:
         logger.warning(f"Errore salvataggio state.json: {exc}")
@@ -700,7 +747,7 @@ def _load_paper_state() -> None:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         if not data.get("paper_only_build") or data.get("symbol") != CONFIG["symbol"]:
             return
-        state["capital"] = float(data.get("capital", state["capital"])); state["kill_switch_active"] = bool(data.get("kill_switch_active", False)); state["kill_switch_reason"] = data.get("kill_switch_reason"); state["kill_switch_time"] = data.get("kill_switch_time"); state["active_strategy"] = data.get("active_strategy", state["active_strategy"]); state["strategy"] = state["active_strategy"]; state["fallback_strategy"] = data.get("fallback_strategy", CONFIG["auto_strategy_fallback"]); state["market_regime"] = data.get("market_regime", state["market_regime"]); state["strategy_selector_reason"] = data.get("strategy_selector_reason", state["strategy_selector_reason"]); state["strategy_scores"] = data.get("strategy_scores", state["strategy_scores"])
+        state["capital"] = float(data.get("capital", state["capital"])); state["kill_switch_active"] = bool(data.get("kill_switch_active", False)); state["kill_switch_reason"] = data.get("kill_switch_reason"); state["kill_switch_time"] = data.get("kill_switch_time"); state["active_strategy"] = data.get("active_strategy", state["active_strategy"]); state["strategy"] = state["active_strategy"]; state["fallback_strategy"] = data.get("fallback_strategy", CONFIG["auto_strategy_fallback"]); state["market_regime"] = data.get("market_regime", state["market_regime"]); state["strategy_selector_reason"] = data.get("strategy_selector_reason", state["strategy_selector_reason"]); state["strategy_scores"] = data.get("strategy_scores", state["strategy_scores"]); state["entry_cooldowns"].update(data.get("entry_cooldowns", {})); state["last_sl_direction"] = data.get("last_sl_direction"); state["last_sl_time"] = data.get("last_sl_time")
         saved = data.get("open_position")
         if saved and saved.get("strategy") in ALLOWED_STRATEGIES:
             state["open_position"] = saved
@@ -767,8 +814,23 @@ async def _handle_closed_1m_candle(k: dict[str, Any]) -> None:
     closed_candles.append(candle); closed_prices.append(candle["c"]); closed_volumes.append(candle["v"]); state["candles"] = list(closed_candles); state["last_closed_candle_time"] = candle["T"]
     if state["last_signal_candle_time"] == candle["T"]:
         return
-    raw = get_signal(candle["T"], candle["c"]); dec = _decorate_signal(raw, candle["T"], candle["c"]); state["signal"] = dec; state["last_signal_candle_time"] = candle["T"]
-    _add_log("signal", {"direction": dec["type"].upper(), "entry": candle["c"], "strategy": dec.get("strategy")}, dec.get("score", 0), dec.get("entry_block_reason") or dec.get("detail", ""))
+    _tick_entry_cooldowns()
+    raw = get_signal(candle["T"], candle["c"]); dec = _decorate_signal(raw, candle["T"], candle["c"]); state["last_signal_candle_time"] = candle["T"]
+    if state["open_position"]:
+        dec["entry_allowed"] = False
+        dec["entry_block_reason"] = "position_already_open"
+        dec["detail"] = f"{dec.get('detail', '')} | monitor only: posizione aperta"
+        state["signal"] = dec
+        minute = datetime.fromtimestamp(candle["T"] / 1000).minute
+        if minute % 5 == 0 and state.get("last_monitor_log_candle_time") != candle["T"]:
+            pos = state["open_position"]
+            _add_log("monitor", {"direction": pos.get("direction", "OPEN"), "entry": candle["c"], "strategy": pos.get("strategy", state.get("active_strategy"))}, pos.get("unrealized", 0.0), "position_already_open")
+            state["last_monitor_log_candle_time"] = candle["T"]
+        _save_paper_state()
+        return
+    state["signal"] = dec
+    if dec.get("type") in {"buy", "sell"} or dec.get("entry_block_reason"):
+        _add_log("signal", {"direction": dec["type"].upper(), "entry": candle["c"], "strategy": dec.get("strategy")}, dec.get("score", 0), dec.get("entry_block_reason") or dec.get("detail", ""))
     if dec["entry_allowed"]:
         await open_position(dec, candle["c"], candle["T"])
     _save_paper_state()
@@ -860,7 +922,7 @@ async def api_config(body: dict[str, Any]) -> JSONResponse:
     try:
         candidate = _validated_config_update(body)
         if state["open_position"]:
-            blocked = {"strategy", "auto_strategy_selector", "auto_strategy_fallback", "capital", "risk_pct", "tp_ratio", "sl_atr_mult", "max_notional_pct", "allow_short"}
+            blocked = {"strategy", "auto_strategy_selector", "auto_strategy_fallback", "capital", "risk_pct", "tp_ratio", "sl_atr_mult", "max_notional_pct", "allow_short", "post_sl_cooldown_candles"}
             if any(k in body for k in blocked):
                 raise ValueError("Posizione aperta: modifiche operative bloccate fino alla chiusura")
         capital_changed = candidate["capital"] != CONFIG["capital"]
