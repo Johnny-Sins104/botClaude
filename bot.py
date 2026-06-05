@@ -94,13 +94,13 @@ CONFIG: dict[str, Any] = {
     "ema_slow": _env_int("EMA_SLOW", 21),
     "rsi_period": _env_int("RSI_PERIOD", 14),
     "bb_period": _env_int("BB_PERIOD", 20),
-    "bb_mult": _env_float("BB_MULT", 2.0, aliases=("BB_DEV",)),
+    "bb_dev": _env_float("BB_DEV", 2.0, aliases=("BB_MULT",)),
     "macd_fast": _env_int("MACD_FAST", 12),
     "macd_slow": _env_int("MACD_SLOW", 26),
-    "macd_signal": _env_int("MACD_SIGNAL", 9, aliases=("MACD_SIG",)),
-    "ichi_tenkan": _env_int("ICHI_TENKAN", 9, aliases=("ICHI_T",)),
-    "ichi_kijun": _env_int("ICHI_KIJUN", 26, aliases=("ICHI_K",)),
-    "ichi_senkou_b": _env_int("ICHI_SENKOU_B", 52, aliases=("ICHI_S",)),
+    "macd_sig": _env_int("MACD_SIG", 9, aliases=("MACD_SIGNAL",)),
+    "ichi_t": _env_int("ICHI_T", 9, aliases=("ICHI_TENKAN",)),
+    "ichi_k": _env_int("ICHI_K", 26, aliases=("ICHI_KIJUN",)),
+    "ichi_s": _env_int("ICHI_S", 52, aliases=("ICHI_SENKOU_B",)),
     "fee_pct": _env_float("FEE_PCT", 0.001),
     "slippage_pct": _env_float("SLIPPAGE_PCT", 0.0002),
     "max_notional_pct": _env_float("MAX_NOTIONAL_PCT", 0.95),
@@ -126,13 +126,13 @@ CONFIG_SCHEMA: dict[str, type] = {
     "ema_slow": int,
     "rsi_period": int,
     "bb_period": int,
-    "bb_mult": float,
+    "bb_dev": float,
     "macd_fast": int,
     "macd_slow": int,
-    "macd_signal": int,
-    "ichi_tenkan": int,
-    "ichi_kijun": int,
-    "ichi_senkou_b": int,
+    "macd_sig": int,
+    "ichi_t": int,
+    "ichi_k": int,
+    "ichi_s": int,
     "fee_pct": float,
     "slippage_pct": float,
     "max_notional_pct": float,
@@ -145,6 +145,14 @@ CONFIG_SCHEMA: dict[str, type] = {
     "trailing_stop": bool,
     "whipsaw_filter": bool,
     "mtf_filter": bool,
+}
+
+CONFIG_KEY_ALIASES = {
+    "bb_mult": "bb_dev",
+    "macd_signal": "macd_sig",
+    "ichi_tenkan": "ichi_t",
+    "ichi_kijun": "ichi_k",
+    "ichi_senkou_b": "ichi_s",
 }
 
 
@@ -201,15 +209,15 @@ def _validate_config(candidate: dict[str, Any]) -> None:
         raise ValueError("rsi_period deve essere tra 2 e 100")
     if not 5 <= candidate["bb_period"] <= 300:
         raise ValueError("bb_period deve essere tra 5 e 300")
-    if not 0.5 <= candidate["bb_mult"] <= 5:
-        raise ValueError("bb_mult deve essere tra 0.5 e 5")
+    if not 0.5 <= candidate["bb_dev"] <= 5:
+        raise ValueError("bb_dev deve essere tra 0.5 e 5")
     if not candidate["macd_fast"] >= 2:
         raise ValueError("macd_fast deve essere >= 2")
     if not candidate["macd_slow"] > candidate["macd_fast"]:
         raise ValueError("macd_slow deve essere maggiore di macd_fast")
-    if not 2 <= candidate["macd_signal"] <= 100:
-        raise ValueError("macd_signal deve essere tra 2 e 100")
-    if not candidate["ichi_tenkan"] < candidate["ichi_kijun"] < candidate["ichi_senkou_b"]:
+    if not 2 <= candidate["macd_sig"] <= 100:
+        raise ValueError("macd_sig deve essere tra 2 e 100")
+    if not candidate["ichi_t"] < candidate["ichi_k"] < candidate["ichi_s"]:
         raise ValueError("parametri Ichimoku non coerenti: tenkan < kijun < senkou_b")
     if not 0 <= candidate["fee_pct"] <= 0.01:
         raise ValueError("fee_pct deve essere tra 0 e 0.01")
@@ -230,12 +238,19 @@ def _validate_config(candidate: dict[str, Any]) -> None:
 
 
 def _validated_config_update(body: dict[str, Any]) -> dict[str, Any]:
-    unknown = sorted(set(body) - set(CONFIG_SCHEMA))
+    normalized_body: dict[str, Any] = {}
+    for key, value in body.items():
+        canonical_key = CONFIG_KEY_ALIASES.get(key, key)
+        if canonical_key in normalized_body:
+            raise ValueError(f"Parametro duplicato dopo alias: {key}")
+        normalized_body[canonical_key] = value
+
+    unknown = sorted(set(normalized_body) - set(CONFIG_SCHEMA))
     if unknown:
         raise ValueError(f"Parametri sconosciuti: {', '.join(unknown)}")
 
     candidate = deepcopy(CONFIG)
-    for key, value in body.items():
+    for key, value in normalized_body.items():
         candidate[key] = _coerce_value(key, value)
     _validate_config(candidate)
     return candidate
@@ -249,6 +264,21 @@ except ValueError as exc:
 
 def _public_config() -> dict[str, Any]:
     return deepcopy(CONFIG)
+
+
+def _strategy_env_params() -> dict[str, Any]:
+    return {
+        "EMA_FAST": CONFIG["ema_fast"],
+        "EMA_SLOW": CONFIG["ema_slow"],
+        "BB_PERIOD": CONFIG["bb_period"],
+        "BB_DEV": CONFIG["bb_dev"],
+        "MACD_FAST": CONFIG["macd_fast"],
+        "MACD_SLOW": CONFIG["macd_slow"],
+        "MACD_SIG": CONFIG["macd_sig"],
+        "ICHI_T": CONFIG["ichi_t"],
+        "ICHI_K": CONFIG["ichi_k"],
+        "ICHI_S": CONFIG["ichi_s"],
+    }
 
 
 state: dict[str, Any] = {
@@ -270,7 +300,9 @@ state: dict[str, Any] = {
     "price_change": 0.0,
     "last_price_update_time": None,
     "price_source": "binance_websocket_live",
-    "strategy_source": "closed_candles_only",
+    "signal_data_source": "closed_candles_only",
+    "strategy_source": "env_config",
+    "strategy_params": _strategy_env_params(),
     "websocket_status": "stopped",
     "websocket_connected_at": None,
     "reconnect_count": 0,
@@ -346,6 +378,7 @@ def _sync_state_config() -> None:
     state["symbol"] = CONFIG["symbol"]
     state["short_entries_enabled"] = CONFIG["allow_short"]
     state["config"] = _public_config()
+    state["strategy_params"] = _strategy_env_params()
     _refresh_risk_guard()
 
 
@@ -631,8 +664,8 @@ def signal_bb() -> dict[str, Any]:
 
     mid = sma(prices_list, CONFIG["bb_period"])
     deviation = std_dev(prices_list, CONFIG["bb_period"])
-    upper = mid + CONFIG["bb_mult"] * deviation
-    lower = mid - CONFIG["bb_mult"] * deviation
+    upper = mid + CONFIG["bb_dev"] * deviation
+    lower = mid - CONFIG["bb_dev"] * deviation
     current = prices_list[-1]
     previous = prices_list[-2]
     width_pct = (upper - lower) / mid * 100
@@ -641,7 +674,7 @@ def signal_bb() -> dict[str, Any]:
     cross_up = current > upper and previous <= upper
 
     conditions = [
-        {"name": f"Banda sup ({CONFIG['bb_mult']}x)", "value": f"{upper:.4f}", "ok_buy": False, "ok_sell": cross_up},
+        {"name": f"Banda sup ({CONFIG['bb_dev']}x)", "value": f"{upper:.4f}", "ok_buy": False, "ok_sell": cross_up},
         {"name": "Banda inferiore", "value": f"{lower:.4f}", "ok_buy": cross_down, "ok_sell": False},
         {"name": "Larghezza bande", "value": f"{width_pct:.2f}%", "ok_buy": width_pct > 1.5, "ok_sell": width_pct > 1.5},
     ]
@@ -663,7 +696,7 @@ def signal_bb() -> dict[str, Any]:
 def signal_macd() -> dict[str, Any]:
     prices_list = list(closed_prices)
     slow_period = CONFIG["macd_slow"]
-    signal_period = CONFIG["macd_signal"]
+    signal_period = CONFIG["macd_sig"]
     if len(prices_list) < slow_period + signal_period + 2:
         return {"type": "wait", "score": 0, "detail": "Dati insufficienti su candele chiuse", "conditions": []}
 
@@ -732,14 +765,14 @@ def signal_macd() -> dict[str, Any]:
 
 def signal_ichi() -> dict[str, Any]:
     prices_list = list(closed_prices)
-    need = CONFIG["ichi_senkou_b"] + 5
+    need = CONFIG["ichi_s"] + 5
     if len(prices_list) < need:
         return {"type": "wait", "score": 0, "detail": f"Servono {need} candele chiuse (hai {len(prices_list)})", "conditions": []}
 
-    tenkan = (max(prices_list[-CONFIG["ichi_tenkan"]:]) + min(prices_list[-CONFIG["ichi_tenkan"]:])) / 2
-    kijun = (max(prices_list[-CONFIG["ichi_kijun"]:]) + min(prices_list[-CONFIG["ichi_kijun"]:])) / 2
+    tenkan = (max(prices_list[-CONFIG["ichi_t"]:]) + min(prices_list[-CONFIG["ichi_t"]:])) / 2
+    kijun = (max(prices_list[-CONFIG["ichi_k"]:]) + min(prices_list[-CONFIG["ichi_k"]:])) / 2
     span_a = (tenkan + kijun) / 2
-    span_b = (max(prices_list[-CONFIG["ichi_senkou_b"]:]) + min(prices_list[-CONFIG["ichi_senkou_b"]:])) / 2
+    span_b = (max(prices_list[-CONFIG["ichi_s"]:]) + min(prices_list[-CONFIG["ichi_s"]:])) / 2
     current = prices_list[-1]
 
     above_cloud = current > max(span_a, span_b)
@@ -1027,6 +1060,7 @@ def _save_paper_state() -> None:
             "trading_halted": state["trading_halted"],
             "trading_halt_reason": state["trading_halt_reason"],
             "risk_guard": state["risk_guard"],
+            "strategy_params": _strategy_env_params(),
             "config": {
                 "strategy": CONFIG["strategy"],
                 "risk_pct": CONFIG["risk_pct"],
@@ -1198,7 +1232,8 @@ def _update_live_price(price: float) -> None:
     state["last_price_update_time"] = now
     state["last_update"] = now
     state["price_source"] = "binance_websocket_live"
-    state["strategy_source"] = "closed_candles_only"
+    state["signal_data_source"] = "closed_candles_only"
+    state["strategy_source"] = "env_config"
     if _refresh_risk_guard():
         _save_paper_state()
 

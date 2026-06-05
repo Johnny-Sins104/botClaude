@@ -71,11 +71,31 @@ Non impostare `PAPER_MODE=false`: questa build lo rifiuta sempre.
 
 Tutte le strategie calcolano nuovi segnali solo su candele chiuse. Il prezzo live non genera ingressi intrabar.
 
+Parametri strategia letti da `.env`:
+
+```dotenv
+EMA_FAST=9
+EMA_SLOW=21
+
+BB_PERIOD=20
+BB_DEV=2.0
+
+MACD_FAST=12
+MACD_SLOW=26
+MACD_SIG=9
+
+ICHI_T=9
+ICHI_K=26
+ICHI_S=52
+```
+
+Se migliori queste quattro strategie, mantieni questi nomi nel `.env`; `/api/state` espone anche `strategy_params` con i valori effettivamente caricati.
+
 ## Prezzo Live e Dashboard
 
 - Live BTC price: aggiornato tick-by-tick dal WebSocket Binance.
 - PnL, stop loss, take profit e trailing stop: aggiornati usando il prezzo live.
-- Strategy signal: aggiornato solo quando una candela 1m e' chiusa.
+- Signal data: i segnali usano solo candele 1m chiuse, ma la strategia e i parametri arrivano da `.env`.
 - La dashboard legge `/api/state` ogni 500 ms e aggiorna solo campi dinamici.
 
 ## Sicurezza e Robustezza

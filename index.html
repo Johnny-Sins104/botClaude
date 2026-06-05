@@ -165,7 +165,8 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
       </div>
       <div class="source-strip">
         <span id="price-source">Live BTC price: tick-by-tick</span>
-        <span id="strategy-source">Strategy signal: closed candles only</span>
+        <span id="strategy-source">Signal data: closed candles only</span>
+        <span id="strategy-params">Strategy params: -</span>
         <span id="price-time">Price update: -</span>
       </div>
       <div class="ind-pills" id="ind-pills"></div>
@@ -285,6 +286,14 @@ function pnlClass(v) { return Number(v) >= 0 ? 'g' : 'r'; }
 const STRAT_LABELS = { ema: 'EMA+RSI+VWAP', bb: 'Bollinger Bands', macd: 'MACD', ichi: 'Ichimoku' };
 const STRAT_COLORS = { ema: '#3b82f6', bb: '#f59e0b', macd: '#22c55e', ichi: '#a855f7' };
 
+function strategyParamsText(s) {
+  const p = s.strategy_params || {};
+  if (s.strategy === 'bb') return `BB ${p.BB_PERIOD || 20}/${p.BB_DEV || 2}`;
+  if (s.strategy === 'macd') return `MACD ${p.MACD_FAST || 12}/${p.MACD_SLOW || 26}/${p.MACD_SIG || 9}`;
+  if (s.strategy === 'ichi') return `ICHI ${p.ICHI_T || 9}/${p.ICHI_K || 26}/${p.ICHI_S || 52}`;
+  return `EMA ${p.EMA_FAST || 9}/${p.EMA_SLOW || 21}`;
+}
+
 // ── UPDATE FUNCTIONS ───────────────────────────────────────────────────────────
 function updateTopbar(s) {
   document.getElementById('tb-symbol').textContent = s.symbol || '—';
@@ -330,7 +339,9 @@ function updatePrice(s) {
   document.getElementById('price-source').textContent =
     'Live BTC price: ' + (s.price_source || 'binance_websocket_live');
   document.getElementById('strategy-source').textContent =
-    'Strategy signal: ' + (s.strategy_source || 'closed_candles_only');
+    'Signal data: ' + (s.signal_data_source || s.strategy_source || 'closed_candles_only');
+  document.getElementById('strategy-params').textContent =
+    'Strategy params: ' + strategyParamsText(s);
   document.getElementById('price-time').textContent =
     'Price update: ' + (s.last_price_update_time ? new Date(s.last_price_update_time).toLocaleTimeString('it-IT') : '-');
 }
