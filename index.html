@@ -94,7 +94,7 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
 .no-pos { text-align: center; color: var(--txt3); font-size: 12px; padding: 8px; }
 
 /* ── LOG ── */
-.log-list { display: flex; flex-direction: column; gap: 4px; }
+.log-list { display: flex; flex-direction: column; gap: 4px; max-height: 190px; overflow-y: auto; }
 .log-item { display: flex; justify-content: space-between; align-items: center; font-size: 10px; padding: 5px 8px; border-radius: 5px; background: var(--bg2); gap: 6px; }
 .log-item .lt { color: var(--txt3); flex-shrink: 0; }
 .log-item .la { font-weight: 600; flex-shrink: 0; }
@@ -193,6 +193,7 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
         <span id="strategy-source">Signal data: closed candles only</span>
         <span id="strategy-params">Strategy params: -</span>
         <span id="price-time">Price update: -</span>
+        <span id="indicator-preview">Indicator preview: live visual only</span>
       </div>
       <div class="ind-pills" id="ind-pills"></div>
       <div style="position:relative; height:200px; margin-top:4px">
@@ -214,6 +215,18 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
     <div class="chart-card" style="padding:12px">
       <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--txt3); margin-bottom:8px">Curva Equity</div>
       <div class="equity-wrap"><canvas id="eqChart" role="img" aria-label="Curva equity nel tempo">Equity</canvas></div>
+    </div>
+
+    <div class="chart-card" style="padding:12px">
+      <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--txt3); margin-bottom:8px">Posizione aperta</div>
+      <div id="pos-panel"><div class="no-pos">Nessuna posizione aperta</div></div>
+    </div>
+
+    <div class="chart-card" style="padding:12px">
+      <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--txt3); margin-bottom:8px">Log operazioni</div>
+      <div class="log-list" id="log-list">
+        <div style="color:var(--txt3); font-size:11px">Nessuna operazione</div>
+      </div>
     </div>
 
   </div>
@@ -308,22 +321,10 @@ body { background: var(--bg0); color: var(--txt); font-family: var(--font); font
     </div>
 
     <div class="rp-section">
-      <div class="rp-title">Posizione aperta</div>
-      <div id="pos-panel"><div class="no-pos">Nessuna posizione</div></div>
-    </div>
-
-    <div class="rp-section">
       <div class="rp-title">Condizioni strategia</div>
       <div id="cond-meta" style="color:var(--txt3); font-size:10px; line-height:1.5; margin-bottom:8px">In attesa di candela chiusa...</div>
       <div class="cond-list" id="cond-list">
         <div style="color:var(--txt3); font-size:11px">In attesa di segnale...</div>
-      </div>
-    </div>
-
-    <div class="rp-section" style="flex:1; overflow-y:auto">
-      <div class="rp-title">Log operazioni</div>
-      <div class="log-list" id="log-list">
-        <div style="color:var(--txt3); font-size:11px">Nessuna operazione</div>
       </div>
     </div>
 
@@ -380,6 +381,62 @@ function fp(n) {
 }
 function pnlClass(v) { return Number(v) >= 0 ? 'g' : 'r'; }
 function el(id) { return document.getElementById(id); }
+function calcEma(data, period) {
+  if (!data || data.length < period) return null;
+  const k = 2 / (period + 1);
+  let value = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < data.length; i++) value = data[i] * k + value * (1 - k);
+  return value;
+}
+function emaSeries(data, period) {
+  const out = new Array(data.length).fill(null);
+  if (!data || data.length < period) return out;
+  const k = 2 / (period + 1);
+  let value = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  out[period - 1] = value;
+  for (let i = period; i < data.length; i++) {
+    value = data[i] * k + value * (1 - k);
+    out[i] = value;
+  }
+  return out;
+}
+function smaLast(data, period) {
+  if (!data || data.length < period) return null;
+  return data.slice(-period).reduce((a, b) => a + b, 0) / period;
+}
+function stdLast(data, period) {
+  if (!data || data.length < period) return null;
+  const items = data.slice(-period);
+  const mean = items.reduce((a, b) => a + b, 0) / period;
+  return Math.sqrt(items.reduce((acc, x) => acc + Math.pow(x - mean, 2), 0) / period);
+}
+function closesWithLive(s) {
+  const candles = s.candles || [];
+  const closes = candles.map(c => Number(c.c));
+  const live = Number(s.last_live_price || s.price || 0);
+  if (live > 0) {
+    if (!closes.length || Math.abs(closes[closes.length - 1] - live) > 1e-9) closes.push(live);
+    else closes[closes.length - 1] = live;
+  }
+  return closes;
+}
+function liveIndicatorSnapshot(s) {
+  const closes = closesWithLive(s);
+  const cfg = s.config || {};
+  const out = {};
+  if (closes.length) {
+    out.ema_fast_live = calcEma(closes, Number(cfg.ema_fast || 9));
+    out.ema_slow_live = calcEma(closes, Number(cfg.ema_slow || 21));
+    const bbMid = smaLast(closes, Number(cfg.bb_period || 20));
+    const bbStd = stdLast(closes, Number(cfg.bb_period || 20));
+    if (bbMid !== null && bbStd !== null) {
+      out.bb_mid_live = bbMid;
+      out.bb_upper_live = bbMid + Number(cfg.bb_dev || 2) * bbStd;
+      out.bb_lower_live = bbMid - Number(cfg.bb_dev || 2) * bbStd;
+    }
+  }
+  return out;
+}
 
 const STRAT_LABELS = { ema: 'EMA+RSI+VWAP', bb: 'Bollinger Bands', macd: 'MACD', ichi: 'Ichimoku' };
 const STRAT_COLORS = { ema: '#3b82f6', bb: '#f59e0b', macd: '#22c55e', ichi: '#a855f7' };
@@ -549,6 +606,8 @@ function updatePrice(s) {
     'Strategy params: ' + strategyParamsText(s);
   document.getElementById('price-time').textContent =
     'Price update: ' + (s.last_price_update_time ? new Date(s.last_price_update_time).toLocaleTimeString('it-IT') : '-');
+  document.getElementById('indicator-preview').textContent =
+    'Indicator preview: live visual only, strategy closed candles';
 }
 
 function updateSignalBox(s) {
@@ -659,18 +718,24 @@ function updateConditions(s) {
 
 function updateIndicatorPills(s) {
   const inds = s.indicators || {};
+  const live = liveIndicatorSnapshot(s);
   const strat = s.strategy;
   let pills = [];
 
   if (strat === 'ema') {
-    if (inds.ema_fast) pills.push({ c: '#3b82f6', l: `EMA${s.config?.ema_fast||9} ${fp(inds.ema_fast)}` });
-    if (inds.ema_slow) pills.push({ c: '#f59e0b', l: `EMA${s.config?.ema_slow||21} ${fp(inds.ema_slow)}` });
-    if (inds.vwap)     pills.push({ c: '#a855f7', l: `VWAP ${fp(inds.vwap)}` });
-    if (inds.rsi)      pills.push({ c: '#22c55e', l: `RSI ${fmt(inds.rsi, 1)}` });
+    if (live.ema_fast_live) pills.push({ c: '#3b82f6', l: `EMA${s.config?.ema_fast||9} live ${fp(live.ema_fast_live)}` });
+    else if (inds.ema_fast) pills.push({ c: '#3b82f6', l: `EMA${s.config?.ema_fast||9} ${fp(inds.ema_fast)}` });
+    if (live.ema_slow_live) pills.push({ c: '#f59e0b', l: `EMA${s.config?.ema_slow||21} live ${fp(live.ema_slow_live)}` });
+    else if (inds.ema_slow) pills.push({ c: '#f59e0b', l: `EMA${s.config?.ema_slow||21} ${fp(inds.ema_slow)}` });
+    if (inds.vwap)     pills.push({ c: '#a855f7', l: `VWAP closed ${fp(inds.vwap)}` });
+    if (inds.rsi)      pills.push({ c: '#22c55e', l: `RSI closed ${fmt(inds.rsi, 1)}` });
   } else if (strat === 'bb') {
-    if (inds.bb_upper) pills.push({ c: '#ef4444', l: `Sup ${fp(inds.bb_upper)}` });
-    if (inds.bb_mid)   pills.push({ c: '#888',    l: `Mid ${fp(inds.bb_mid)}` });
-    if (inds.bb_lower) pills.push({ c: '#22c55e', l: `Inf ${fp(inds.bb_lower)}` });
+    if (live.bb_upper_live) pills.push({ c: '#ef4444', l: `Sup live ${fp(live.bb_upper_live)}` });
+    else if (inds.bb_upper) pills.push({ c: '#ef4444', l: `Sup ${fp(inds.bb_upper)}` });
+    if (live.bb_mid_live) pills.push({ c: '#888', l: `Mid live ${fp(live.bb_mid_live)}` });
+    else if (inds.bb_mid)   pills.push({ c: '#888',    l: `Mid ${fp(inds.bb_mid)}` });
+    if (live.bb_lower_live) pills.push({ c: '#22c55e', l: `Inf live ${fp(live.bb_lower_live)}` });
+    else if (inds.bb_lower) pills.push({ c: '#22c55e', l: `Inf ${fp(inds.bb_lower)}` });
     if (inds.bb_width) pills.push({ c: '#f59e0b', l: `Largh ${fmt(inds.bb_width, 2)}%` });
   } else if (strat === 'macd') {
     if (inds.macd)      pills.push({ c: '#3b82f6', l: `MACD ${fmt(inds.macd, 4)}` });
@@ -692,23 +757,25 @@ function updateChartData(s) {
   const candles = s.candles || [];
   if (!candles.length) return;
 
-  const closes = candles.map(c => c.c);
+  const closedCloses = candles.map(c => Number(c.c));
+  const closes = closesWithLive(s);
   const inds   = s.indicators || {};
+  const live   = liveIndicatorSnapshot(s);
   const strat  = s.strategy;
-  const labels = candles.map((_, i) => i);
+  const labels = closes.map((_, i) => i === closes.length - 1 && closes.length !== closedCloses.length ? 'live' : i);
 
   pChart.data.labels = labels;
   pChart.data.datasets[0].data = closes;
 
   const len = closes.length;
   if (strat === 'ema') {
-    pChart.data.datasets[1].data = new Array(len).fill(inds.ema_fast || null);
-    pChart.data.datasets[2].data = new Array(len).fill(inds.ema_slow || null);
-    pChart.data.datasets[3].data = new Array(len).fill(inds.vwap     || null);
+    pChart.data.datasets[1].data = emaSeries(closes, Number(s.config?.ema_fast || 9));
+    pChart.data.datasets[2].data = emaSeries(closes, Number(s.config?.ema_slow || 21));
+    pChart.data.datasets[3].data = new Array(len).fill(inds.vwap || null);
   } else if (strat === 'bb') {
-    pChart.data.datasets[1].data = new Array(len).fill(inds.bb_upper || null);
-    pChart.data.datasets[2].data = new Array(len).fill(inds.bb_mid   || null);
-    pChart.data.datasets[3].data = new Array(len).fill(inds.bb_lower || null);
+    pChart.data.datasets[1].data = new Array(len).fill(live.bb_upper_live || inds.bb_upper || null);
+    pChart.data.datasets[2].data = new Array(len).fill(live.bb_mid_live   || inds.bb_mid   || null);
+    pChart.data.datasets[3].data = new Array(len).fill(live.bb_lower_live || inds.bb_lower || null);
   } else if (strat === 'ichi') {
     pChart.data.datasets[1].data = new Array(len).fill(inds.tenkan || null);
     pChart.data.datasets[2].data = new Array(len).fill(inds.kijun  || null);
