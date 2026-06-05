@@ -1,8 +1,8 @@
 """
 Paper-only Binance scalping bot with FastAPI dashboard.
 
-This build is intentionally unable to place live exchange orders. It uses
-Binance public market data for paper trading and dashboard updates only.
+This build cannot place live exchange orders. It uses Binance public market data
+for paper trading and dashboard updates only.
 
 Strategies remain limited to: ema, bb, macd, ichi.
 AUTO_STRATEGY_SELECTOR is only a regime selector that chooses between those four.
@@ -240,14 +240,14 @@ def _strategy_env_params() -> dict[str, Any]:
 
 
 def _selector_state(active: str) -> dict[str, Any]:
-    return {"auto_strategy_selector": CONFIG["auto_strategy_selector"], "active_strategy": active, "fallback_strategy": CONFIG["auto_strategy_fallback"], "market_regime": "manual" if not CONFIG["auto_strategy_selector"] else "initializing", "strategy_selector_reason": "manual_strategy" if not CONFIG["auto_strategy_selector"] else "waiting_for_closed_candles", "strategy_scores": {"ema": 0, "bb": 0, "macd": 0, "ichi": 0}, "strategy_cooldown_remaining": 0, "last_strategy_switch_candle_time": None}
+    return {"auto_strategy_selector": CONFIG["auto_strategy_selector"], "active_strategy": active, "fallback_strategy": CONFIG["auto_strategy_fallback"], "market_regime": "manual" if not CONFIG["auto_strategy_selector"] else "initializing", "strategy_selector_reason": "manual_strategy" if not CONFIG["auto_strategy_selector"] else "waiting_for_historical_bootstrap", "strategy_scores": {"ema": 0, "bb": 0, "macd": 0, "ichi": 0}, "strategy_cooldown_remaining": 0, "last_strategy_switch_candle_time": None}
 
 
 initial_active_strategy = CONFIG["strategy"]
 state: dict[str, Any] = {
-    "running": False, "paper_mode": True, "paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "paper_short_simulation": True, "spot_short_live_supported": False, "short_entries_enabled": CONFIG["allow_short"], "symbol": CONFIG["symbol"], "strategy": initial_active_strategy, "config": _public_config(), "capital": CONFIG["capital"], "init_capital": CONFIG["capital"], "price": 0.0, "last_live_price": 0.0, "price_change": 0.0, "last_price_update_time": None, "price_source": "binance_websocket_live", "signal_data_source": "closed_candles_only", "strategy_source": "manual_or_auto_selector", "strategy_params": _strategy_env_params(), "websocket_status": "stopped", "websocket_connected_at": None, "reconnect_count": 0, "reconnect_delay_sec": 0, "last_reconnect_time": None, "next_reconnect_time": None, "last_websocket_error": None, "shutdown_requested": False, "kill_switch_active": False, "kill_switch_reason": None, "kill_switch_time": None, "trading_halted": False, "trading_halt_reason": None,
+    "running": False, "paper_mode": True, "paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "paper_short_simulation": True, "spot_short_live_supported": False, "short_entries_enabled": CONFIG["allow_short"], "symbol": CONFIG["symbol"], "strategy": initial_active_strategy, "config": _public_config(), "capital": CONFIG["capital"], "init_capital": CONFIG["capital"], "price": 0.0, "last_live_price": 0.0, "price_change": 0.0, "last_price_update_time": None, "price_source": "binance_websocket_live", "signal_data_source": "closed_candles_only", "strategy_source": "manual_or_auto_selector", "strategy_params": _strategy_env_params(), "websocket_status": "stopped", "websocket_connected_at": None, "reconnect_count": 0, "reconnect_delay_sec": 0, "last_reconnect_time": None, "next_reconnect_time": None, "last_websocket_error": None, "historical_bootstrap_status": "pending", "historical_candles_loaded_1m": 0, "historical_candles_loaded_5m": 0, "historical_bootstrap_error": None, "shutdown_requested": False, "kill_switch_active": False, "kill_switch_reason": None, "kill_switch_time": None, "trading_halted": False, "trading_halt_reason": None,
     "risk_guard": {"daily_date": _today_str(), "daily_start_capital": CONFIG["capital"], "daily_realized_pnl": 0.0, "daily_unrealized_pnl": 0.0, "daily_total_pnl": 0.0, "daily_loss_limit_pct": CONFIG["daily_loss_limit_pct"], "daily_loss_limit_amount": round(CONFIG["capital"] * CONFIG["daily_loss_limit_pct"] / 100, 6), "daily_loss_limit_enabled": CONFIG["daily_loss_limit_enabled"], "daily_loss_limit_hit": False, "daily_loss_limit_hit_time": None},
-    "last_signal_candle_time": None, "last_signal_update_time": None, "last_signal_close_price": None, "last_closed_candle_time": None, "open_position": None, "trades": [], "metrics": {"total_pnl": 0.0, "total_pnl_pct": 0.0, "trades": 0, "wins": 0, "win_rate": 0.0, "max_dd": 0.0, "peak_capital": CONFIG["capital"]}, "indicators": {}, "signal": {"type": "wait", "score": 0, "detail": "Bot in attesa di candele chiuse", "conditions": []}, "candles": [], "equity_curve": [CONFIG["capital"]], "log": [], "errors": [], "last_update": None, "filters": {"whipsaw": False, "mtf_trend": "neutral"}, **_selector_state(initial_active_strategy),
+    "last_signal_candle_time": None, "last_signal_update_time": None, "last_signal_close_price": None, "last_closed_candle_time": None, "open_position": None, "trades": [], "metrics": {"total_pnl": 0.0, "total_pnl_pct": 0.0, "trades": 0, "wins": 0, "win_rate": 0.0, "max_dd": 0.0, "peak_capital": CONFIG["capital"]}, "indicators": {}, "signal": {"type": "wait", "score": 0, "detail": "Bot in attesa di bootstrap candele storiche", "conditions": []}, "candles": [], "equity_curve": [CONFIG["capital"]], "log": [], "errors": [], "last_update": None, "filters": {"whipsaw": False, "mtf_trend": "neutral"}, **_selector_state(initial_active_strategy),
 }
 
 closed_prices: deque[float] = deque(maxlen=MAX_CANDLES)
@@ -440,58 +440,72 @@ def signal_ema() -> dict[str, Any]:
     trend = mtf_trend()
     gap = abs(fast - slow) / slow * 100 if fast and slow else 0
     buy_ema, sell_ema = fast > slow, fast < slow
-    if CONFIG["mtf_filter"] and trend == "bear": buy_ema = False
-    if CONFIG["mtf_filter"] and trend == "bull": sell_ema = False
-    if CONFIG["whipsaw_filter"] and gap < 0.05: buy_ema = sell_ema = False
+    if CONFIG["mtf_filter"] and trend == "bear":
+        buy_ema = False
+    if CONFIG["mtf_filter"] and trend == "bull":
+        sell_ema = False
+    if CONFIG["whipsaw_filter"] and gap < 0.05:
+        buy_ema = sell_ema = False
     state["filters"] = {"whipsaw": CONFIG["whipsaw_filter"] and gap < 0.05, "mtf_trend": trend}
     state["indicators"] = {"ema_fast": fast, "ema_slow": slow, "vwap": vv, "rsi": rr, "ema_gap_pct": gap}
     cond = [{"name": f"EMA{CONFIG['ema_fast']} vs EMA{CONFIG['ema_slow']}", "ok_buy": buy_ema, "ok_sell": sell_ema, "value": f"{fast:.2f} {'>' if fast > slow else '<'} {slow:.2f}"}, {"name": "Prezzo close vs VWAP", "ok_buy": close > vv, "ok_sell": close < vv, "value": f"{close:.2f} {'sopra' if close > vv else 'sotto'} {vv:.2f}"}, {"name": f"RSI({CONFIG['rsi_period']})", "ok_buy": 20 <= rr <= 45, "ok_sell": 55 <= rr <= 80, "value": f"{rr:.1f}"}]
     buy = sum(1 for c in cond if c["ok_buy"]); sell = sum(1 for c in cond if c["ok_sell"])
-    if buy >= 2: return {"type": "buy", "score": buy * 30, "detail": "EMA/VWAP/RSI bullish", "conditions": cond}
-    if sell >= 2: return {"type": "sell", "score": sell * 30, "detail": "EMA/VWAP/RSI bearish", "conditions": cond}
+    if buy >= 2:
+        return {"type": "buy", "score": buy * 30, "detail": "EMA/VWAP/RSI bullish", "conditions": cond}
+    if sell >= 2:
+        return {"type": "sell", "score": sell * 30, "detail": "EMA/VWAP/RSI bearish", "conditions": cond}
     return {"type": "wait", "score": 0, "detail": "EMA senza conferma 2/3", "conditions": cond}
 
 
 def signal_bb() -> dict[str, Any]:
     prices, _ = _pv(); period = CONFIG["bb_period"]
-    if len(prices) < period + 2: return {"type": "wait", "score": 0, "detail": "Dati insufficienti per Bollinger", "conditions": []}
+    if len(prices) < period + 2:
+        return {"type": "wait", "score": 0, "detail": "Dati insufficienti per Bollinger", "conditions": []}
     mid, sd = sma(prices, period), std_dev(prices, period)
     upper, lower, close, prev = mid + CONFIG["bb_dev"] * sd, mid - CONFIG["bb_dev"] * sd, prices[-1], prices[-2]
     width = (upper - lower) / mid * 100 if mid else 0
     state["indicators"] = {"bb_upper": upper, "bb_mid": mid, "bb_lower": lower, "bb_width": width}
     cross_down, cross_up = prev >= lower and close < lower, prev <= upper and close > upper
     cond = [{"name": "Close sotto banda inferiore", "ok_buy": cross_down, "ok_sell": False, "value": f"{close:.2f} < {lower:.2f}"}, {"name": "Close sopra banda superiore", "ok_buy": False, "ok_sell": cross_up, "value": f"{close:.2f} > {upper:.2f}"}, {"name": "Larghezza bande", "ok_buy": width > 1.0, "ok_sell": width > 1.0, "value": f"{width:.2f}%"}]
-    if cross_down: return {"type": "buy", "score": 80, "detail": "Bollinger mean reversion BUY", "conditions": cond}
-    if cross_up: return {"type": "sell", "score": 80, "detail": "Bollinger mean reversion SELL", "conditions": cond}
+    if cross_down:
+        return {"type": "buy", "score": 80, "detail": "Bollinger mean reversion BUY", "conditions": cond}
+    if cross_up:
+        return {"type": "sell", "score": 80, "detail": "Bollinger mean reversion SELL", "conditions": cond}
     return {"type": "wait", "score": 0, "detail": "Prezzo dentro le Bollinger", "conditions": cond}
 
 
 def _macd_snapshot(prices: list[float]) -> Optional[dict[str, float]]:
-    if len(prices) < CONFIG["macd_slow"] + CONFIG["macd_sig"] + 3: return None
+    if len(prices) < CONFIG["macd_slow"] + CONFIG["macd_sig"] + 3:
+        return None
     fs, ss = ema_values(prices, CONFIG["macd_fast"]), ema_values(prices, CONFIG["macd_slow"])
     offset = len(fs) - len(ss)
     macd_line = [f - s for f, s in zip(fs[offset:] if offset > 0 else fs, ss)]
     sig = ema_values(macd_line, CONFIG["macd_sig"])
-    if len(sig) < 2: return None
+    if len(sig) < 2:
+        return None
     m = macd_line[-len(sig):]
     return {"macd_prev": m[-2], "macd_cur": m[-1], "signal_prev": sig[-2], "signal_cur": sig[-1], "hist_prev": m[-2] - sig[-2], "hist_cur": m[-1] - sig[-1]}
 
 
 def signal_macd() -> dict[str, Any]:
     prices, _ = _pv(); snap = _macd_snapshot(prices)
-    if not snap: return {"type": "wait", "score": 0, "detail": "Dati insufficienti per MACD", "conditions": []}
+    if not snap:
+        return {"type": "wait", "score": 0, "detail": "Dati insufficienti per MACD", "conditions": []}
     bull = snap["macd_prev"] <= snap["signal_prev"] and snap["macd_cur"] > snap["signal_cur"]
     bear = snap["macd_prev"] >= snap["signal_prev"] and snap["macd_cur"] < snap["signal_cur"]
     state["indicators"] = {"macd": snap["macd_cur"], "signal": snap["signal_cur"], "histogram": snap["hist_cur"]}
     cond = [{"name": "MACD cross bullish", "ok_buy": bull, "ok_sell": False, "value": f"{snap['macd_cur']:.4f} vs {snap['signal_cur']:.4f}"}, {"name": "MACD cross bearish", "ok_buy": False, "ok_sell": bear, "value": f"{snap['macd_cur']:.4f} vs {snap['signal_cur']:.4f}"}, {"name": "Istogramma direzione", "ok_buy": snap["hist_cur"] > snap["hist_prev"], "ok_sell": snap["hist_cur"] < snap["hist_prev"], "value": f"{snap['hist_cur']:.4f}"}]
-    if bull: return {"type": "buy", "score": 85 if snap["macd_cur"] > 0 else 60, "detail": "MACD bullish cross", "conditions": cond}
-    if bear: return {"type": "sell", "score": 85 if snap["macd_cur"] < 0 else 60, "detail": "MACD bearish cross", "conditions": cond}
+    if bull:
+        return {"type": "buy", "score": 85 if snap["macd_cur"] > 0 else 60, "detail": "MACD bullish cross", "conditions": cond}
+    if bear:
+        return {"type": "sell", "score": 85 if snap["macd_cur"] < 0 else 60, "detail": "MACD bearish cross", "conditions": cond}
     return {"type": "wait", "score": 0, "detail": "MACD senza cross", "conditions": cond}
 
 
 def _ichimoku_values() -> Optional[dict[str, float]]:
     candles = list(closed_candles)
-    if len(candles) < CONFIG["ichi_s"]: return None
+    if len(candles) < CONFIG["ichi_s"]:
+        return None
     def mid(period: int) -> float:
         recent = candles[-period:]
         return (max(c["h"] for c in recent) + min(c["l"] for c in recent)) / 2
@@ -501,19 +515,23 @@ def _ichimoku_values() -> Optional[dict[str, float]]:
 
 def signal_ichi() -> dict[str, Any]:
     vals = _ichimoku_values(); prices, _ = _pv()
-    if not vals or not prices: return {"type": "wait", "score": 0, "detail": "Dati insufficienti per Ichimoku", "conditions": []}
+    if not vals or not prices:
+        return {"type": "wait", "score": 0, "detail": "Dati insufficienti per Ichimoku", "conditions": []}
     close = prices[-1]; top, bottom = max(vals["span_a"], vals["span_b"]), min(vals["span_a"], vals["span_b"])
     cond = [{"name": "Prezzo sopra/sotto Kumo", "ok_buy": close > top, "ok_sell": close < bottom, "value": f"{close:.2f} / cloud {bottom:.2f}-{top:.2f}"}, {"name": "Tenkan/Kijun", "ok_buy": vals["tenkan"] > vals["kijun"], "ok_sell": vals["tenkan"] < vals["kijun"], "value": f"{vals['tenkan']:.2f}/{vals['kijun']:.2f}"}, {"name": "Colore cloud", "ok_buy": vals["span_a"] > vals["span_b"], "ok_sell": vals["span_a"] < vals["span_b"], "value": f"{vals['span_a']:.2f}/{vals['span_b']:.2f}"}]
     state["indicators"] = vals
     buy = sum(1 for c in cond if c["ok_buy"]); sell = sum(1 for c in cond if c["ok_sell"])
-    if buy >= 2: return {"type": "buy", "score": buy * 30, "detail": "Ichimoku bullish", "conditions": cond}
-    if sell >= 2: return {"type": "sell", "score": sell * 30, "detail": "Ichimoku bearish", "conditions": cond}
+    if buy >= 2:
+        return {"type": "buy", "score": buy * 30, "detail": "Ichimoku bullish", "conditions": cond}
+    if sell >= 2:
+        return {"type": "sell", "score": sell * 30, "detail": "Ichimoku bearish", "conditions": cond}
     return {"type": "wait", "score": 0, "detail": "Ichimoku non chiaro", "conditions": cond}
 
 
 def _strategy_suitability_scores() -> tuple[dict[str, int], str, str]:
     prices, volumes = _pv(); scores = {"ema": 0, "bb": 0, "macd": 0, "ichi": 0}
-    if len(prices) < 30: return scores, "warmup", "not_enough_closed_candles"
+    if len(prices) < 30:
+        return scores, "warmup", "not_enough_closed_candles"
     close = prices[-1]; fast, slow = ema(prices, CONFIG["ema_fast"]), ema(prices, CONFIG["ema_slow"]); vv = vwap(prices, volumes); rr = rsi(prices, CONFIG["rsi_period"])
     gap = abs(fast - slow) / slow * 100 if fast and slow else 0
     if fast and slow:
@@ -552,7 +570,8 @@ def select_active_strategy(candle_time: Any = None) -> str:
         return state["active_strategy"]
     scores, regime, reason = _strategy_suitability_scores()
     chosen = max(scores, key=scores.get)
-    if scores[chosen] < CONFIG["auto_strategy_min_score"]: chosen = CONFIG["auto_strategy_fallback"]
+    if scores[chosen] < CONFIG["auto_strategy_min_score"]:
+        chosen = CONFIG["auto_strategy_fallback"]
     if chosen != state.get("active_strategy"):
         state["last_strategy_switch_candle_time"] = candle_time
         state["strategy_cooldown_remaining"] = CONFIG["auto_strategy_cooldown_candles"]
@@ -590,7 +609,8 @@ def _position_pnl(pos: dict[str, Any], live_price: float) -> dict[str, float]:
 
 
 async def open_position(signal: dict[str, Any], signal_price: float, candle_time: Any = None) -> None:
-    if state["open_position"] or signal.get("type") not in {"buy", "sell"}: return
+    if state["open_position"] or signal.get("type") not in {"buy", "sell"}:
+        return
     block = _entry_block_reason_for_signal(signal.get("type", "wait"), signal.get("score", 0) or 0)
     if block:
         current = deepcopy(state.get("signal") or signal); current.update({"entry_allowed": False, "entry_block_reason": block, "detail": f"{current.get('detail', 'Segnale rilevato')} | Entry bloccata: {block}"}); state["signal"] = current; return
@@ -606,7 +626,8 @@ async def open_position(signal: dict[str, Any], signal_price: float, candle_time
     size_by_capital = max_notional / entry_fill if entry_fill > 0 else 0
     final_size = min(size_by_risk, size_by_capital)
     notional = final_size * entry_fill
-    if final_size <= 0 or notional < MIN_NOTIONAL_USDT: return
+    if final_size <= 0 or notional < MIN_NOTIONAL_USDT:
+        return
     fee_entry = abs(entry_fill * final_size) * CONFIG["fee_pct"]
     active = state.get("active_strategy", CONFIG["strategy"])
     position = {"direction": "LONG" if direction == 1 else "SHORT", "dir": direction, "entry": round(entry_fill, 6), "entry_price_signal": round(signal_price, 6), "entry_price_fill": round(entry_fill, 6), "sl": round(stop_loss, 6), "sl_initial": round(stop_loss, 6), "tp": round(take_profit, 6), "size": round(final_size, 8), "open_time": _now_iso(), "signal_candle_time": candle_time, "strategy": active, "market_regime": state.get("market_regime"), "strategy_selector_reason": state.get("strategy_selector_reason"), "unrealized": 0.0, "unrealized_gross": 0.0, "trailing": CONFIG["trailing_stop"], "fee_entry": round(fee_entry, 8), "fee_pct": CONFIG["fee_pct"], "slippage_pct": CONFIG["slippage_pct"], "risk_amount": round(risk_amount, 6), "notional": round(notional, 6), "size_by_risk": round(size_by_risk, 8), "size_by_capital": round(size_by_capital, 8), "final_size": round(final_size, 8), "max_notional_pct": CONFIG["max_notional_pct"], "paper_short_simulation": direction == -1}
@@ -615,20 +636,25 @@ async def open_position(signal: dict[str, Any], signal_price: float, candle_time
 
 async def check_position(live_price: float) -> None:
     pos = state["open_position"]
-    if not pos: return
+    if not pos:
+        return
     pnl = _position_pnl(pos, live_price); pos["unrealized"] = round(pnl["pnl_net"], 4); pos["unrealized_gross"] = round(pnl["pnl_gross"], 4); pos["exit_price_live_est"] = round(pnl["exit_fill"], 6); pos["fee_exit_est"] = round(pnl["fee_exit"], 8); _refresh_risk_guard()
     if pos.get("trailing", False):
         dist = abs(pos["entry_price_fill"] - pos["sl_initial"])
-        if pos["dir"] == 1: pos["sl"] = max(pos["sl"], round(live_price - dist, 6))
-        else: pos["sl"] = min(pos["sl"], round(live_price + dist, 6))
+        if pos["dir"] == 1:
+            pos["sl"] = max(pos["sl"], round(live_price - dist, 6))
+        else:
+            pos["sl"] = min(pos["sl"], round(live_price + dist, 6))
     hit_sl = (pos["dir"] == 1 and live_price <= pos["sl"]) or (pos["dir"] == -1 and live_price >= pos["sl"])
     hit_tp = (pos["dir"] == 1 and live_price >= pos["tp"]) or (pos["dir"] == -1 and live_price <= pos["tp"])
-    if hit_sl or hit_tp: await close_position(live_price, "TP" if hit_tp else "SL")
+    if hit_sl or hit_tp:
+        await close_position(live_price, "TP" if hit_tp else "SL")
 
 
 async def close_position(signal_price: float, reason: str) -> None:
     pos = state["open_position"]
-    if not pos: return
+    if not pos:
+        return
     pnl = _position_pnl(pos, signal_price); state["capital"] += pnl["pnl_net"]
     m = state["metrics"]; m["trades"] += 1; m["wins"] += 1 if pnl["pnl_net"] > 0 else 0; m["total_pnl"] = state["capital"] - state["init_capital"]; m["total_pnl_pct"] = m["total_pnl"] / state["init_capital"] * 100; m["win_rate"] = m["wins"] / m["trades"] * 100 if m["trades"] else 0; m["peak_capital"] = max(m["peak_capital"], state["capital"]); m["max_dd"] = max(m["max_dd"], (m["peak_capital"] - state["capital"]) / m["peak_capital"] * 100)
     state["equity_curve"].append(round(state["capital"], 2)); state["equity_curve"] = state["equity_curve"][-500:]
@@ -642,60 +668,122 @@ def _save_trades_json() -> None:
     try:
         data = {"symbol": state["symbol"], "strategy": state["strategy"], "active_strategy": state["active_strategy"], "paper_mode": state["paper_mode"], "paper_only_build": True, "capital": state["capital"], "metrics": state["metrics"], "trades": state["trades"], "equity_curve": state["equity_curve"], "saved_at": _now_iso()}
         tmp = TRADES_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"); tmp.replace(TRADES_FILE)
-    except Exception as exc: logger.warning(f"Errore salvataggio trades.json: {exc}")
+    except Exception as exc:
+        logger.warning(f"Errore salvataggio trades.json: {exc}")
 
 
 def _save_paper_state() -> None:
     try:
         data = {"paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "symbol": state["symbol"], "strategy": state["strategy"], "active_strategy": state["active_strategy"], "fallback_strategy": state["fallback_strategy"], "market_regime": state["market_regime"], "strategy_selector_reason": state["strategy_selector_reason"], "strategy_scores": state["strategy_scores"], "capital": state["capital"], "last_update": _now_iso(), "kill_switch_active": state["kill_switch_active"], "kill_switch_reason": state["kill_switch_reason"], "kill_switch_time": state["kill_switch_time"], "trading_halted": state["trading_halted"], "trading_halt_reason": state["trading_halt_reason"], "risk_guard": state["risk_guard"], "strategy_params": _strategy_env_params(), "config": _public_config(), "open_position": state["open_position"]}
         tmp = STATE_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"); tmp.replace(STATE_FILE)
-    except Exception as exc: logger.warning(f"Errore salvataggio state.json: {exc}")
+    except Exception as exc:
+        logger.warning(f"Errore salvataggio state.json: {exc}")
 
 
 def _load_trades_json() -> None:
-    if not TRADES_FILE.exists(): return
+    if not TRADES_FILE.exists():
+        return
     try:
         data = json.loads(TRADES_FILE.read_text(encoding="utf-8"))
         if data.get("symbol") == CONFIG["symbol"]:
             state["trades"] = data.get("trades", [])[:100]; state["equity_curve"] = data.get("equity_curve", [state["capital"]])[-500:] or [state["capital"]]
-            if isinstance(data.get("metrics"), dict): state["metrics"].update(data["metrics"])
-    except Exception as exc: logger.warning(f"Impossibile caricare trades.json: {exc}")
+            if isinstance(data.get("metrics"), dict):
+                state["metrics"].update(data["metrics"])
+    except Exception as exc:
+        logger.warning(f"Impossibile caricare trades.json: {exc}")
 
 
 def _load_paper_state() -> None:
-    if not STATE_FILE.exists(): return
+    if not STATE_FILE.exists():
+        return
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        if not data.get("paper_only_build") or data.get("symbol") != CONFIG["symbol"]: return
+        if not data.get("paper_only_build") or data.get("symbol") != CONFIG["symbol"]:
+            return
         state["capital"] = float(data.get("capital", state["capital"])); state["kill_switch_active"] = bool(data.get("kill_switch_active", False)); state["kill_switch_reason"] = data.get("kill_switch_reason"); state["kill_switch_time"] = data.get("kill_switch_time"); state["active_strategy"] = data.get("active_strategy", state["active_strategy"]); state["strategy"] = state["active_strategy"]; state["fallback_strategy"] = data.get("fallback_strategy", CONFIG["auto_strategy_fallback"]); state["market_regime"] = data.get("market_regime", state["market_regime"]); state["strategy_selector_reason"] = data.get("strategy_selector_reason", state["strategy_selector_reason"]); state["strategy_scores"] = data.get("strategy_scores", state["strategy_scores"])
         saved = data.get("open_position")
-        if saved and saved.get("strategy") in ALLOWED_STRATEGIES: state["open_position"] = saved
-        if isinstance(data.get("risk_guard"), dict): state["risk_guard"].update(data["risk_guard"])
+        if saved and saved.get("strategy") in ALLOWED_STRATEGIES:
+            state["open_position"] = saved
+        if isinstance(data.get("risk_guard"), dict):
+            state["risk_guard"].update(data["risk_guard"])
         _sync_trading_halt_state()
-    except Exception as exc: logger.warning(f"Impossibile caricare state.json; parto flat: {exc}"); state["open_position"] = None
+    except Exception as exc:
+        logger.warning(f"Impossibile caricare state.json; parto flat: {exc}"); state["open_position"] = None
 
 
 def _snapshot_state() -> dict[str, Any]:
     _sync_state_config(); snap = deepcopy(state); snap["config"] = _public_config(); snap["strategy_params"] = _strategy_env_params(); snap["last_update"] = _now_iso(); return snap
 
 
+def _kline_row_to_candle(row: list[Any]) -> dict[str, Any]:
+    return {"t": int(row[0]), "T": int(row[6]), "o": float(row[1]), "h": float(row[2]), "l": float(row[3]), "c": float(row[4]), "v": float(row[5])}
+
+
+async def _bootstrap_historical_candles(public_client: AsyncClient) -> None:
+    """Load closed historical candles so strategies are ready immediately at startup."""
+    if closed_candles and closed_prices_5m:
+        return
+    state["historical_bootstrap_status"] = "loading"
+    try:
+        rows_1m = await public_client.get_klines(symbol=CONFIG["symbol"], interval="1m", limit=MAX_CANDLES)
+        rows_5m = await public_client.get_klines(symbol=CONFIG["symbol"], interval="5m", limit=200)
+        # The last REST kline can still be open; drop it and let websocket handle live updates.
+        closed_rows_1m = rows_1m[:-1] if len(rows_1m) > 1 else rows_1m
+        closed_rows_5m = rows_5m[:-1] if len(rows_5m) > 1 else rows_5m
+        closed_candles.clear(); closed_prices.clear(); closed_volumes.clear(); closed_prices_5m.clear()
+        for row in closed_rows_1m[-MAX_CANDLES:]:
+            candle = _kline_row_to_candle(row)
+            closed_candles.append(candle); closed_prices.append(candle["c"]); closed_volumes.append(candle["v"])
+        for row in closed_rows_5m[-200:]:
+            closed_prices_5m.append(float(row[4]))
+        state["candles"] = list(closed_candles)
+        state["historical_candles_loaded_1m"] = len(closed_candles)
+        state["historical_candles_loaded_5m"] = len(closed_prices_5m)
+        state["historical_bootstrap_status"] = "ready"
+        state["historical_bootstrap_error"] = None
+        if closed_candles:
+            last = closed_candles[-1]
+            state["last_closed_candle_time"] = last["T"]
+            state["last_signal_candle_time"] = last["T"]
+            state["last_live_price"] = last["c"]
+            state["price"] = last["c"]
+            raw = get_signal(last["T"], last["c"])
+            dec = _decorate_signal(raw, last["T"], last["c"])
+            dec["entry_allowed"] = False
+            dec["entry_block_reason"] = "historical_bootstrap_signal_only"
+            dec["detail"] = f"{dec.get('detail', 'Storico caricato')} | attendo nuova candela live"
+            state["signal"] = dec
+        _add_log("bootstrap", {"direction": "SYSTEM", "entry": state.get("price", 0), "strategy": state.get("active_strategy")}, 0, f"loaded_1m={len(closed_candles)} loaded_5m={len(closed_prices_5m)}")
+        logger.info(f"Bootstrap storico caricato: 1m={len(closed_candles)} 5m={len(closed_prices_5m)}")
+    except Exception as exc:
+        state["historical_bootstrap_status"] = "error"
+        state["historical_bootstrap_error"] = str(exc)
+        _append_error(f"Bootstrap storico fallito: {exc}")
+        logger.warning(f"Bootstrap storico fallito: {exc}")
+
+
 async def _handle_closed_1m_candle(k: dict[str, Any]) -> None:
     candle = {"t": k.get("t"), "T": k.get("T"), "o": float(k["o"]), "h": float(k["h"]), "l": float(k["l"]), "c": float(k["c"]), "v": float(k["v"])}
     closed_candles.append(candle); closed_prices.append(candle["c"]); closed_volumes.append(candle["v"]); state["candles"] = list(closed_candles); state["last_closed_candle_time"] = candle["T"]
-    if state["last_signal_candle_time"] == candle["T"]: return
+    if state["last_signal_candle_time"] == candle["T"]:
+        return
     raw = get_signal(candle["T"], candle["c"]); dec = _decorate_signal(raw, candle["T"], candle["c"]); state["signal"] = dec; state["last_signal_candle_time"] = candle["T"]
     _add_log("signal", {"direction": dec["type"].upper(), "entry": candle["c"], "strategy": dec.get("strategy")}, dec.get("score", 0), dec.get("entry_block_reason") or dec.get("detail", ""))
-    if dec["entry_allowed"]: await open_position(dec, candle["c"], candle["T"])
+    if dec["entry_allowed"]:
+        await open_position(dec, candle["c"], candle["T"])
     _save_paper_state()
 
 
 async def _handle_kline_message(k: dict[str, Any]) -> None:
     interval = k.get("i"); close = float(k["c"]); prev = state.get("last_live_price") or close
     state["last_live_price"] = close; state["price"] = close; state["price_change"] = (close - prev) / prev * 100 if prev else 0.0; state["last_price_update_time"] = _now_iso(); state["last_update"] = state["last_price_update_time"]
-    if state["open_position"]: await check_position(close)
+    if state["open_position"]:
+        await check_position(close)
     if k.get("x"):
-        if interval == "1m": await _handle_closed_1m_candle(k)
-        elif interval == "5m": closed_prices_5m.append(close)
+        if interval == "1m":
+            await _handle_closed_1m_candle(k)
+        elif interval == "5m":
+            closed_prices_5m.append(close); state["historical_candles_loaded_5m"] = len(closed_prices_5m)
 
 
 async def websocket_loop() -> None:
@@ -703,20 +791,23 @@ async def websocket_loop() -> None:
     streams = [f"{CONFIG['symbol'].lower()}@kline_1m", f"{CONFIG['symbol'].lower()}@kline_5m"]
     while not state["shutdown_requested"]:
         try:
-            state["websocket_status"] = "connecting"; client = await AsyncClient.create(); manager = BinanceSocketManager(client)
+            state["websocket_status"] = "connecting"; client = await AsyncClient.create(); await _bootstrap_historical_candles(client); manager = BinanceSocketManager(client)
             async with manager.multiplex_socket(streams) as stream:
                 state["running"] = True; state["websocket_status"] = "connected"; state["websocket_connected_at"] = _now_iso(); state["next_reconnect_time"] = None; logger.info(f"WebSocket connesso: {', '.join(streams)}")
                 while not state["shutdown_requested"]:
                     msg = await stream.recv(); data = msg.get("data", msg); k = data.get("k") if isinstance(data, dict) else None
-                    if k: await _handle_kline_message(k)
-        except asyncio.CancelledError: raise
+                    if k:
+                        await _handle_kline_message(k)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             state["running"] = False; state["websocket_status"] = "reconnecting"; state["last_websocket_error"] = str(exc); state["reconnect_count"] += 1
             delay = min(CONFIG["reconnect_max_delay_sec"], CONFIG["reconnect_initial_delay_sec"] * (2 ** min(state["reconnect_count"], 5)))
             state["reconnect_delay_sec"] = delay; state["last_reconnect_time"] = _now_iso(); state["next_reconnect_time"] = (datetime.now() + timedelta(seconds=delay)).isoformat(); _append_error(f"WebSocket reconnect: {exc}"); logger.warning(f"WebSocket error: {exc}; reconnect tra {delay:.1f}s"); await asyncio.sleep(delay)
         finally:
             if client:
-                with suppress(Exception): await client.close_connection()
+                with suppress(Exception):
+                    await client.close_connection()
                 client = None
     state["running"] = False; state["websocket_status"] = "stopped"
 
@@ -725,14 +816,17 @@ async def websocket_loop() -> None:
 async def lifespan(app: FastAPI):
     global websocket_task
     _load_trades_json(); _load_paper_state(); _sync_state_config(); websocket_task = asyncio.create_task(websocket_loop())
-    try: yield
+    try:
+        yield
     finally:
         state["shutdown_requested"] = True
         if websocket_task:
             websocket_task.cancel()
-            with suppress(asyncio.CancelledError): await websocket_task
+            with suppress(asyncio.CancelledError):
+                await websocket_task
         if client:
-            with suppress(Exception): await client.close_connection()
+            with suppress(Exception):
+                await client.close_connection()
         _save_paper_state()
 
 
@@ -767,7 +861,8 @@ async def api_config(body: dict[str, Any]) -> JSONResponse:
         candidate = _validated_config_update(body)
         if state["open_position"]:
             blocked = {"strategy", "auto_strategy_selector", "auto_strategy_fallback", "capital", "risk_pct", "tp_ratio", "sl_atr_mult", "max_notional_pct", "allow_short"}
-            if any(k in body for k in blocked): raise ValueError("Posizione aperta: modifiche operative bloccate fino alla chiusura")
+            if any(k in body for k in blocked):
+                raise ValueError("Posizione aperta: modifiche operative bloccate fino alla chiusura")
         capital_changed = candidate["capital"] != CONFIG["capital"]
         CONFIG.clear(); CONFIG.update(candidate)
         if capital_changed and not state["open_position"]:
@@ -780,10 +875,12 @@ async def api_config(body: dict[str, Any]) -> JSONResponse:
 @app.post("/api/kill-switch")
 async def api_kill_switch(body: dict[str, Any]) -> JSONResponse:
     enabled = body.get("enabled")
-    if not isinstance(enabled, bool): raise HTTPException(status_code=400, detail="enabled deve essere booleano")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled deve essere booleano")
     if enabled:
         state["kill_switch_active"] = True; state["kill_switch_reason"] = str(body.get("reason") or "dashboard_kill_switch"); state["kill_switch_time"] = _now_iso()
-        if body.get("close_position") is True and state["open_position"] and state["last_live_price"]: await close_position(state["last_live_price"], "KILL")
+        if body.get("close_position") is True and state["open_position"] and state["last_live_price"]:
+            await close_position(state["last_live_price"], "KILL")
     else:
         state["kill_switch_active"] = False; state["kill_switch_reason"] = None; state["kill_switch_time"] = None; state["signal"] = {"type": "wait", "score": 0, "detail": "Kill switch resettato: attendo nuova candela chiusa", "conditions": []}
     _sync_trading_halt_state(); _save_paper_state(); return JSONResponse({"ok": True, "kill_switch_active": state["kill_switch_active"], "trading_halted": state["trading_halted"]})
