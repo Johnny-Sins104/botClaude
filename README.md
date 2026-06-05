@@ -44,19 +44,20 @@ http://localhost:8000
 
 ## Configurazione Minima
 
-`.env.example` contiene solo placeholder:
+`.env.example` contiene solo placeholder per le chiavi e i parametri operativi paper:
 
 ```dotenv
 BINANCE_API_KEY=your_key_here
 BINANCE_API_SECRET=your_secret_here
 PAPER_MODE=true
-HOST=127.0.0.1
-PORT=8000
 SYMBOL=BTCUSDT
-CAPITAL=1000
+CAPITAL=1000.0
 STRATEGY=ema
 RISK_PCT=1.0
+TP_RATIO=2.0
 ```
+
+Il server resta comunque locale di default: `HOST=127.0.0.1` e `PORT=8000` sono default nel codice.
 
 Non impostare `PAPER_MODE=false`: questa build lo rifiuta sempre.
 
