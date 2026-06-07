@@ -92,6 +92,45 @@ ICHI_S=52
 
 Se migliori queste quattro strategie, mantieni questi nomi nel `.env`; `/api/state` espone anche `strategy_params` con i valori effettivamente caricati.
 
+## Filtro HTF Trend
+
+Filtro direzionale che usa il trend sul timeframe alto (5m) per bloccare gli ingressi controtrend. Calcola due EMA sul 5m (`HTF_TREND_FAST` e `HTF_TREND_SLOW`) e ne misura il gap percentuale:
+
+- Blocca **BUY** se il trend 5m **non è bullish** (`htf_trend_not_aligned_buy`).
+- Blocca **SELL** se il trend 5m **non è bearish** (`htf_trend_not_aligned_sell`).
+- Blocca entrambi se il 5m è piatto, cioè gap `< HTF_TREND_MIN_GAP_PCT` (`htf_trend_flat`).
+
+Serve a ridurre gli ingressi controtrend, che nei test sono la principale fonte di perdite (in particolare i LONG durante fasi ribassiste).
+
+```dotenv
+HTF_TREND_FILTER=true
+HTF_TREND_FAST=50
+HTF_TREND_SLOW=100
+HTF_TREND_MIN_GAP_PCT=0.02
+```
+
+Lo stato corrente è esposto in `/api/state` sotto `filters`: `htf_trend` (bull/bear/neutral), `htf_gap_pct`, `htf_fast`, `htf_slow`.
+
+### Stato validazione
+
+I risultati positivi riportati in precedenti versioni del README provenivano da una finestra
+di soli 7 giorni e non sono stati confermati su dati out-of-sample a 90 giorni.
+
+Il motore di backtest aveva inoltre un difetto: `_refresh_risk_guard()` ri-abilitava il
+`daily_loss_limit` ogni candela, interrompendo il backtest a circa -3% e producendo
+statistiche distorte. Il difetto è stato corretto nella versione corrente (vedi PATCH 1).
+
+Finché non verrà completata una validazione out-of-sample a 90 giorni con i criteri
+documentati nel README (≥50 trade, Profit Factor >1, P&L positivo dopo fee e slippage),
+nessun valore di `TP_RATIO`, `SL_ATR_MULT` o `MIN_ENTRY_SCORE` deve essere considerato
+una configurazione profittevole.
+
+### Nota su ALLOW_SHORT
+
+- `ALLOW_SHORT=false` è la scelta più prudente: nessuno short simulato, rischio operativo minore.
+- Precedenti backtest su 7 giorni mostravano P&L positivo quasi interamente da SHORT, ma
+  questo risultato non è stato confermato out-of-sample. Default impostato a `false`.
+
 ## Prezzo Live e Dashboard
 
 - Live BTC price: aggiornato tick-by-tick dal WebSocket Binance.

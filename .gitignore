@@ -16,3 +16,10 @@ env/
 *.log
 .DS_Store
 Thumbs.db
+bot.py.bak.*
+trades_RESET.json
+*.tmp.json
+.claude/
+CLAUDE_CODE_PROMPT.md
+PROGRESS.md
+SKILL.md
