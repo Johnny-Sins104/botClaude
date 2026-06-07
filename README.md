@@ -120,8 +120,31 @@ Il motore di backtest aveva inoltre un difetto: `_refresh_risk_guard()` ri-abili
 `daily_loss_limit` ogni candela, interrompendo il backtest a circa -3% e producendo
 statistiche distorte. Il difetto è stato corretto nella versione corrente (vedi PATCH 1).
 
-Finché non verrà completata una validazione out-of-sample a 90 giorni con i criteri
-documentati nel README (≥50 trade, Profit Factor >1, P&L positivo dopo fee e slippage),
+### Risultati validazione BTCUSDT 90 giorni (2026-03-08 → 2026-06-06)
+
+Eseguita con `FEE_PCT=0.001`, `SLIPPAGE_PCT=0.0002`. Dettaglio completo: `python validate_backtest.py`.
+
+| Configurazione | Trade | Win% | PF | P&L netto | MaxDD |
+|---|---:|---:|---:|---:|---:|
+| 90d Auto+HTF (con costi) | 147 | 21.1% | 0.763 | -86.37 USDT | 13.91% |
+| 90d Auto+HTF (senza costi) | 147 | 21.1% | 1.016 | +4.80 USDT | 7.44% |
+| 90d EMA solo, HTF off | 89 | 18.0% | 0.612 | -93.49 USDT | 11.78% |
+| 90d BB solo, HTF off | 136 | 19.1% | 0.668 | -115.24 USDT | 14.55% |
+| 90d MACD solo, HTF off | 144 | 20.8% | 0.724 | -101.60 USDT | 10.94% |
+| 90d ICHI solo, HTF off | 172 | 17.4% | 0.584 | -182.20 USDT | 18.44% |
+| Train 60d Auto+HTF | 118 | 18.6% | 0.617 | -117.28 USDT | 13.56% |
+| **OOS 30d Auto+HTF** | **38** | **26.3%** | **1.104** | **+9.36 USDT** | 4.89% |
+| OOS 30d BB solo, HTF off | 34 | 32.4% | 1.350 | +27.88 USDT | 2.02% |
+
+**Verdetto**: nessuna configurazione supera i criteri minimi (≥50 trade, PF>1 out-of-sample,
+P&L positivo dopo costi, non dipendente da un solo lato). Il risultato OOS 30d è positivo
+(PF 1.104) ma con soli 38 trade, insufficienti per validità statistica.
+
+Le commissioni totali assorbono l'intero edge grezzo (90d Auto+HTF: -86 USDT con costi vs
++4.80 senza). Prima di ottimizzare i parametri è necessario ridurre il numero di trade
+o aumentare il payoff ratio grezzo.
+
+Finché non viene completata una validazione su simboli e periodi diversi,
 nessun valore di `TP_RATIO`, `SL_ATR_MULT` o `MIN_ENTRY_SCORE` deve essere considerato
 una configurazione profittevole.
 
