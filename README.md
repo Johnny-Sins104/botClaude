@@ -122,27 +122,45 @@ statistiche distorte. Il difetto è stato corretto nella versione corrente (vedi
 
 ### Risultati validazione BTCUSDT 90 giorni (2026-03-08 → 2026-06-06)
 
-Eseguita con `FEE_PCT=0.001`, `SLIPPAGE_PCT=0.0002`. Dettaglio completo: `python validate_backtest.py`.
+Eseguita con `VALIDATION_CONFIG` immutabile (`allow_short=false`, `fee_pct=0.001`, `slippage_pct=0.0002`,
+`ema_slow=21`, `bb_dev=2.0`, `htf_trend_fast=50`, `htf_trend_slow=100`). Modalità: **LONG-ONLY**.
+OOS con warm-up 600 candele 1m (no lookahead). Dettaglio completo: `python validate_backtest.py`.
+
+**90 giorni completi**
 
 | Configurazione | Trade | Win% | PF | P&L netto | MaxDD |
 |---|---:|---:|---:|---:|---:|
-| 90d Auto+HTF (con costi) | 147 | 21.1% | 0.763 | -86.37 USDT | 13.91% |
-| 90d Auto+HTF (senza costi) | 147 | 21.1% | 1.016 | +4.80 USDT | 7.44% |
-| 90d EMA solo, HTF off | 89 | 18.0% | 0.612 | -93.49 USDT | 11.78% |
-| 90d BB solo, HTF off | 136 | 19.1% | 0.668 | -115.24 USDT | 14.55% |
-| 90d MACD solo, HTF off | 144 | 20.8% | 0.724 | -101.60 USDT | 10.94% |
-| 90d ICHI solo, HTF off | 172 | 17.4% | 0.584 | -182.20 USDT | 18.44% |
-| Train 60d Auto+HTF | 118 | 18.6% | 0.617 | -117.28 USDT | 13.56% |
-| **OOS 30d Auto+HTF** | **38** | **26.3%** | **1.104** | **+9.36 USDT** | 4.89% |
-| OOS 30d BB solo, HTF off | 34 | 32.4% | 1.350 | +27.88 USDT | 2.02% |
+| Auto HTF-ON (con costi) | 490 | 32.2% | 0.417 | -332.62 USDT | 33.26% |
+| Auto HTF-ON (senza costi) | 488 | 34.2% | 1.025 | +10.75 USDT | 3.51% |
+| Auto HTF-OFF (con costi) | 906 | 31.3% | 0.416 | -538.41 USDT | 53.88% |
+| EMA HTF-ON | 30 | 36.7% | 0.497 | -20.54 USDT | 2.20% |
+| EMA HTF-OFF | 44 | 38.6% | 0.539 | -26.85 USDT | 2.91% |
+| BB HTF-ON | 394 | 33.5% | 0.439 | -264.41 USDT | 26.44% |
+| BB HTF-OFF | 778 | 32.1% | 0.425 | -473.64 USDT | 47.49% |
+| MACD HTF-ON | 286 | 27.6% | 0.343 | -244.73 USDT | 24.47% |
+| MACD HTF-OFF | 548 | 30.1% | 0.379 | -388.97 USDT | 39.10% |
+| ICHI HTF-ON | 437 | 32.0% | 0.426 | -300.80 USDT | 30.08% |
+| ICHI HTF-OFF | 843 | 30.7% | 0.405 | -522.77 USDT | 52.32% |
 
-**Verdetto**: nessuna configurazione supera i criteri minimi (≥50 trade, PF>1 out-of-sample,
-P&L positivo dopo costi, non dipendente da un solo lato). Il risultato OOS 30d è positivo
-(PF 1.104) ma con soli 38 trade, insufficienti per validità statistica.
+**Split 60d train / 30d OOS**
 
-Le commissioni totali assorbono l'intero edge grezzo (90d Auto+HTF: -86 USDT con costi vs
-+4.80 senza). Prima di ottimizzare i parametri è necessario ridurre il numero di trade
-o aumentare il payoff ratio grezzo.
+| Configurazione | Trade | Win% | PF | P&L netto | MaxDD |
+|---|---:|---:|---:|---:|---:|
+| Train 60d Auto HTF-ON | 402 | 34.1% | 0.448 | -261.38 USDT | 26.14% |
+| OOS 30d Auto HTF-ON (con costi) | 88 | 23.9% | 0.267 | -96.46 USDT | 9.65% |
+| OOS 30d Auto HTF-ON (senza costi) | 86 | 24.4% | 0.633 | -30.25 USDT | 3.02% |
+| OOS 30d Auto HTF-OFF | 253 | 24.5% | 0.308 | -246.29 USDT | 24.69% |
+| OOS 30d BB HTF-ON | 84 | 22.6% | 0.250 | -95.72 USDT | 9.63% |
+| OOS 30d BB HTF-OFF | 243 | 24.7% | 0.299 | -237.10 USDT | 23.88% |
+| OOS 30d MACD HTF-ON | 58 | 19.0% | 0.202 | -73.62 USDT | 7.36% |
+| OOS 30d ICHI HTF-ON | 74 | 20.3% | 0.219 | -90.25 USDT | 9.03% |
+
+**Verdetto**: nessuna configurazione supera i criteri minimi out-of-sample (≥50 trade, PF>1,
+P&L netto positivo dopo costi, nessuna settimana con concentrazione perdite >50%).
+Tutti i run OOS mostrano PF < 1 con i parametri di validazione standard.
+
+Le commissioni assorbono l'intero edge grezzo: Auto HTF-ON 90d vale +10.75 USDT senza costi
+e -332.62 USDT con costi. Il bot non dimostra edge statistico nel periodo testato.
 
 Finché non viene completata una validazione su simboli e periodi diversi,
 nessun valore di `TP_RATIO`, `SL_ATR_MULT` o `MIN_ENTRY_SCORE` deve essere considerato
@@ -150,9 +168,10 @@ una configurazione profittevole.
 
 ### Nota su ALLOW_SHORT
 
-- `ALLOW_SHORT=false` è la scelta più prudente: nessuno short simulato, rischio operativo minore.
-- Precedenti backtest su 7 giorni mostravano P&L positivo quasi interamente da SHORT, ma
-  questo risultato non è stato confermato out-of-sample. Default impostato a `false`.
+- `ALLOW_SHORT=false` è il default e l'unica modalità testata nella validazione ufficiale.
+- I risultati sopra sono in modalità LONG-ONLY. Il criterio di dominanza lato (precedentemente
+  bocciava il 100% LONG) è stato rimosso per la modalità long-only: con short disabilitati
+  è atteso e corretto che tutti i trade siano LONG.
 
 ## Prezzo Live e Dashboard
 
