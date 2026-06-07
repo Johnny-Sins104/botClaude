@@ -11,6 +11,8 @@ AUTO_STRATEGY_SELECTOR is only a regime selector that chooses between those four
 import asyncio
 import json
 import os
+import urllib.parse
+import urllib.request
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from copy import deepcopy
@@ -82,6 +84,8 @@ HOST = _env_str("HOST", "127.0.0.1")
 PORT = _env_int("PORT", 8000)
 MAX_CANDLES = 300
 MIN_NOTIONAL_USDT = 5.0
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 CONFIG: dict[str, Any] = {
     "symbol": _env_str("SYMBOL", "BTCUSDT").upper(),
@@ -113,11 +117,16 @@ CONFIG: dict[str, Any] = {
     "trailing_stop": _env_bool("TRAILING_STOP", "false"),
     "whipsaw_filter": _env_bool("WHIPSAW_FILTER", "true"),
     "mtf_filter": _env_bool("MTF_FILTER", "true"),
+    "htf_trend_filter": _env_bool("HTF_TREND_FILTER", "true"),
+    "htf_trend_fast": _env_int("HTF_TREND_FAST", 50),
+    "htf_trend_slow": _env_int("HTF_TREND_SLOW", 100),
+    "htf_trend_min_gap_pct": _env_float("HTF_TREND_MIN_GAP_PCT", 0.02),
     "auto_strategy_selector": _env_bool("AUTO_STRATEGY_SELECTOR", "true"),
     "auto_strategy_min_score": _env_int("AUTO_STRATEGY_MIN_SCORE", 60),
     "auto_strategy_cooldown_candles": _env_int("AUTO_STRATEGY_COOLDOWN_CANDLES", 3),
     "auto_strategy_fallback": _env_str("AUTO_STRATEGY_FALLBACK", _env_str("STRATEGY", "ema")).lower(),
     "post_sl_cooldown_candles": _env_int("POST_SL_COOLDOWN_CANDLES", 5),
+    "min_capital_alert_pct": _env_float("MIN_CAPITAL_ALERT_PCT", 10.0),
 }
 
 CONFIG_SCHEMA: dict[str, type] = {
@@ -127,9 +136,12 @@ CONFIG_SCHEMA: dict[str, type] = {
     "fee_pct": float, "slippage_pct": float, "max_notional_pct": float, "allow_short": bool,
     "min_entry_score": int, "daily_loss_limit_pct": float, "daily_loss_limit_enabled": bool,
     "reconnect_initial_delay_sec": float, "reconnect_max_delay_sec": float, "trailing_stop": bool,
-    "whipsaw_filter": bool, "mtf_filter": bool, "auto_strategy_selector": bool,
+    "whipsaw_filter": bool, "mtf_filter": bool, "htf_trend_filter": bool,
+    "htf_trend_fast": int, "htf_trend_slow": int, "htf_trend_min_gap_pct": float,
+    "auto_strategy_selector": bool,
     "auto_strategy_min_score": int, "auto_strategy_cooldown_candles": int, "auto_strategy_fallback": str,
     "post_sl_cooldown_candles": int,
+    "min_capital_alert_pct": float,
 }
 CONFIG_KEY_ALIASES = {"bb_mult": "bb_dev", "macd_signal": "macd_sig", "ichi_tenkan": "ichi_t", "ichi_kijun": "ichi_k", "ichi_senkou_b": "ichi_s"}
 
@@ -207,6 +219,12 @@ def _validate_config(candidate: dict[str, Any]) -> None:
         raise ValueError("auto_strategy_cooldown_candles deve essere tra 0 e 20")
     if not 0 <= candidate["post_sl_cooldown_candles"] <= 60:
         raise ValueError("post_sl_cooldown_candles deve essere tra 0 e 60")
+    if not 1.0 <= candidate["min_capital_alert_pct"] <= 90:
+        raise ValueError("min_capital_alert_pct deve essere tra 1.0 e 90")
+    if not 2 <= candidate["htf_trend_fast"] < candidate["htf_trend_slow"] <= 300:
+        raise ValueError("htf_trend_fast deve essere >=2, minore di htf_trend_slow, htf_trend_slow <=300")
+    if not 0 <= candidate["htf_trend_min_gap_pct"] <= 2:
+        raise ValueError("htf_trend_min_gap_pct deve essere tra 0 e 2")
     if not 0.1 <= candidate["daily_loss_limit_pct"] <= 50:
         raise ValueError("daily_loss_limit_pct deve essere tra 0.1 e 50")
     if not 1 <= candidate["reconnect_initial_delay_sec"] <= 60 or not 2 <= candidate["reconnect_max_delay_sec"] <= 300:
@@ -249,7 +267,7 @@ def _selector_state(active: str) -> dict[str, Any]:
 
 initial_active_strategy = CONFIG["strategy"]
 state: dict[str, Any] = {
-    "running": False, "paper_mode": True, "paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "paper_short_simulation": True, "spot_short_live_supported": False, "short_entries_enabled": CONFIG["allow_short"], "symbol": CONFIG["symbol"], "strategy": initial_active_strategy, "config": _public_config(), "capital": CONFIG["capital"], "init_capital": CONFIG["capital"], "price": 0.0, "last_live_price": 0.0, "price_change": 0.0, "last_price_update_time": None, "price_source": "binance_websocket_live", "signal_data_source": "closed_candles_only", "strategy_source": "manual_or_auto_selector", "strategy_params": _strategy_env_params(), "websocket_status": "stopped", "websocket_connected_at": None, "reconnect_count": 0, "reconnect_delay_sec": 0, "last_reconnect_time": None, "next_reconnect_time": None, "last_websocket_error": None, "historical_bootstrap_status": "pending", "historical_candles_loaded_1m": 0, "historical_candles_loaded_5m": 0, "historical_bootstrap_error": None, "shutdown_requested": False, "entry_cooldowns": {"buy": 0, "sell": 0}, "last_sl_direction": None, "last_sl_time": None, "kill_switch_active": False, "kill_switch_reason": None, "kill_switch_time": None, "trading_halted": False, "trading_halt_reason": None,
+    "running": False, "paper_mode": True, "paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "paper_short_simulation": True, "spot_short_live_supported": False, "short_entries_enabled": CONFIG["allow_short"], "symbol": CONFIG["symbol"], "strategy": initial_active_strategy, "config": _public_config(), "capital": CONFIG["capital"], "init_capital": CONFIG["capital"], "price": 0.0, "last_live_price": 0.0, "price_change": 0.0, "last_price_update_time": None, "price_source": "binance_websocket_live", "signal_data_source": "closed_candles_only", "strategy_source": "manual_or_auto_selector", "strategy_params": _strategy_env_params(), "websocket_status": "stopped", "websocket_connected_at": None, "reconnect_count": 0, "reconnect_delay_sec": 0, "last_reconnect_time": None, "next_reconnect_time": None, "last_websocket_error": None, "historical_bootstrap_status": "pending", "historical_candles_loaded_1m": 0, "historical_candles_loaded_5m": 0, "historical_bootstrap_error": None, "shutdown_requested": False, "entry_cooldowns": {"buy": 0, "sell": 0}, "last_sl_direction": None, "last_sl_time": None, "kill_switch_active": False, "kill_switch_reason": None, "kill_switch_time": None, "trading_halted": False, "trading_halt_reason": None, "low_capital_alert": False, "low_capital_alert_time": None,
     "risk_guard": {"daily_date": _today_str(), "daily_start_capital": CONFIG["capital"], "daily_realized_pnl": 0.0, "daily_unrealized_pnl": 0.0, "daily_total_pnl": 0.0, "daily_loss_limit_pct": CONFIG["daily_loss_limit_pct"], "daily_loss_limit_amount": round(CONFIG["capital"] * CONFIG["daily_loss_limit_pct"] / 100, 6), "daily_loss_limit_enabled": CONFIG["daily_loss_limit_enabled"], "daily_loss_limit_hit": False, "daily_loss_limit_hit_time": None},
     "last_signal_candle_time": None, "last_signal_update_time": None, "last_signal_close_price": None, "last_closed_candle_time": None, "last_monitor_log_candle_time": None, "open_position": None, "trades": [], "metrics": {"total_pnl": 0.0, "total_pnl_pct": 0.0, "trades": 0, "wins": 0, "win_rate": 0.0, "max_dd": 0.0, "peak_capital": CONFIG["capital"]}, "indicators": {}, "signal": {"type": "wait", "score": 0, "detail": "Bot in attesa di bootstrap candele storiche", "conditions": []}, "candles": [], "equity_curve": [CONFIG["capital"]], "log": [], "errors": [], "last_update": None, "filters": {"whipsaw": False, "mtf_trend": "neutral"}, **_selector_state(initial_active_strategy),
 }
@@ -258,6 +276,7 @@ closed_prices: deque[float] = deque(maxlen=MAX_CANDLES)
 closed_volumes: deque[float] = deque(maxlen=MAX_CANDLES)
 closed_candles: deque[dict[str, Any]] = deque(maxlen=MAX_CANDLES)
 closed_prices_5m: deque[float] = deque(maxlen=200)
+closed_candles_5m: deque[dict[str, Any]] = deque(maxlen=200)
 client: Optional[AsyncClient] = None
 websocket_task: Optional[asyncio.Task] = None
 
@@ -291,6 +310,42 @@ def _reset_daily_guard(today: Optional[str] = None) -> None:
     _sync_trading_halt_state()
 
 
+async def _notify_telegram(message: str) -> None:
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = urllib.parse.urlencode({"chat_id": TELEGRAM_CHAT_ID, "text": message}).encode()
+    req = urllib.request.Request(url, data=data, method="POST")
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=5))
+    except Exception as exc:
+        logger.debug(f"Telegram notify: {exc}")
+
+
+def _tg(message: str) -> None:
+    """Fire-and-forget Telegram notification. Silente se credenziali assenti o no event loop."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        asyncio.get_running_loop().create_task(_notify_telegram(message))
+    except RuntimeError:
+        pass
+
+
+def _check_capital_alert() -> None:
+    threshold = state["init_capital"] * (1 - CONFIG["min_capital_alert_pct"] / 100)
+    was_alert = bool(state.get("low_capital_alert"))
+    if state["capital"] < threshold:
+        if not was_alert:
+            state["low_capital_alert"] = True
+            state["low_capital_alert_time"] = _now_iso()
+            pct_drop = (state["init_capital"] - state["capital"]) / state["init_capital"] * 100
+            _add_log("alert", {"direction": "SYSTEM", "entry": 0, "strategy": ""}, 0.0, "LOW_CAPITAL")
+            logger.warning(f"[ALERT] Capitale basso: {state['capital']:.2f} USDT (-{pct_drop:.1f}%)")
+            _tg(f"[ALERT] Capitale basso: {state['capital']:.2f} USDT (-{pct_drop:.1f}%)")
+    elif was_alert:
+        state["low_capital_alert"] = False
+
+
 def _refresh_risk_guard() -> bool:
     guard = state["risk_guard"]
     if guard.get("daily_date") != _today_str():
@@ -306,7 +361,9 @@ def _refresh_risk_guard() -> bool:
         guard["daily_loss_limit_hit"] = True
         guard["daily_loss_limit_hit_time"] = _now_iso()
         _add_log("halt", {"direction": "SYSTEM", "entry": 0}, total, "DAILY_LOSS")
+        _tg(f"[HALT] Daily loss limit raggiunto: P&L giornaliero {total:+.2f} USDT")
     _sync_trading_halt_state()
+    _check_capital_alert()
     return True
 
 
@@ -351,6 +408,9 @@ def _entry_block_reason_for_signal(signal_type: str, score: int | float = 0) -> 
         return "short_entries_disabled"
     if signal_type in {"buy", "sell"} and score < CONFIG["min_entry_score"]:
         return f"score_below_min_entry_score_{CONFIG['min_entry_score']}"
+    htf_block = htf_entry_block_reason(signal_type)
+    if htf_block:
+        return htf_block
     return None
 
 
@@ -417,11 +477,41 @@ def vwap(prices: list[float], volumes: list[float], period: int = 30) -> float:
     return sum(p * v for p, v in zip(ps, vs)) / (sum(vs) or 1e-9)
 
 
-def atr_approx(price: float) -> float:
-    if len(closed_candles) < 20:
-        return price * 0.002
-    ranges = [c["h"] - c["l"] for c in list(closed_candles)[-20:]]
-    return sum(ranges) / len(ranges)
+def atr_approx(price: float, period: int = 60) -> float:
+    """True Range ATR (Wilder) su 60 candele 1m (≈1h).
+    Period lungo stabilizza la stima: evita SL microscopici nei momenti quieti
+    che vengono spazzati dal primo tick di volatilità reale.
+    Floor 0.2% impedisce stop sotto la soglia di break-even vs commissioni."""
+    candles = list(closed_candles)
+    if len(candles) < period + 1:
+        return price * 0.003
+    true_ranges = []
+    for i in range(len(candles) - period, len(candles)):
+        high = candles[i]["h"]
+        low = candles[i]["l"]
+        prev_close = candles[i - 1]["c"]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(tr)
+    atr = sum(true_ranges) / len(true_ranges) if true_ranges else price * 0.003
+    return max(atr, price * 0.002)
+
+
+def atr_5m(price: float, period: int = 14) -> float:
+    """ATR (Wilder) su candele 5m: misura la volatilità su scala ~70 minuti.
+    Molto più stabile dell'ATR 1m: le soglie SL/TP riflettono movimenti reali
+    e non il rumore tick-by-tick. Fallback su atr_approx se il buffer non è pronto."""
+    candles = list(closed_candles_5m)
+    if len(candles) < period + 1:
+        return atr_approx(price)
+    true_ranges = []
+    for i in range(len(candles) - period, len(candles)):
+        high = candles[i]["h"]
+        low = candles[i]["l"]
+        prev_close = candles[i - 1]["c"]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(tr)
+    atr = sum(true_ranges) / len(true_ranges) if true_ranges else price * 0.003
+    return max(atr, price * 0.003)
 
 
 def mtf_trend() -> str:
@@ -434,9 +524,39 @@ def mtf_trend() -> str:
     if not fast or not slow:
         return "neutral"
     gap = abs(fast - slow) / slow * 100
-    if gap < 0.03:
+    # Soglia abbassata da 0.03 a 0.015: il 5m resta "neutral" solo se davvero piatto.
+    # Cosi il filtro direzionale blocca piu spesso gli ingressi controtendenza.
+    if gap < 0.015:
         return "neutral"
     return "bull" if fast > slow else "bear"
+
+
+def htf_entry_block_reason(signal_type: str) -> Optional[str]:
+    """Filtro trend HTF su 5m (EMA htf_trend_fast/htf_trend_slow).
+    Aggiorna state["filters"] con lo stato HTF (trend/gap/fast/slow) e ritorna il
+    motivo di blocco per ingressi controtendenza. Ritorna None se il filtro e'
+    disattivo, i dati 5m non bastano, oppure il segnale e' allineato al trend."""
+    if not CONFIG["htf_trend_filter"]:
+        return None
+    prices = list(closed_prices_5m)
+    slow_p = CONFIG["htf_trend_slow"]
+    if len(prices) < slow_p + 5:
+        return None
+    fast, slow = ema(prices, CONFIG["htf_trend_fast"]), ema(prices, slow_p)
+    if not fast or not slow:
+        return None
+    gap = abs(fast - slow) / slow * 100
+    trend = "neutral" if gap < CONFIG["htf_trend_min_gap_pct"] else ("bull" if fast > slow else "bear")
+    state["filters"].update({"htf_trend": trend, "htf_gap_pct": round(gap, 4), "htf_fast": round(fast, 6), "htf_slow": round(slow, 6)})
+    if signal_type not in {"buy", "sell"}:
+        return None
+    if trend == "neutral":
+        return "htf_trend_flat"
+    if signal_type == "buy" and fast <= slow:
+        return "htf_trend_not_aligned_buy"
+    if signal_type == "sell" and fast >= slow:
+        return "htf_trend_not_aligned_sell"
+    return None
 
 
 def _pv() -> tuple[list[float], list[float]]:
@@ -592,7 +712,7 @@ def _strategy_suitability_scores() -> tuple[dict[str, int], str, str]:
     if vals:
         top, bottom = max(vals["span_a"], vals["span_b"]), min(vals["span_a"], vals["span_b"])
         clean = (close > top and vals["tenkan"] > vals["kijun"] and vals["span_a"] > vals["span_b"]) or (close < bottom and vals["tenkan"] < vals["kijun"] and vals["span_a"] < vals["span_b"])
-        scores["ichi"] = 80 if clean else 30
+        scores["ichi"] = 70 if clean else 30
     best = max(scores, key=scores.get); best_score = scores[best]
     if best_score < CONFIG["auto_strategy_min_score"]:
         return scores, "unclear", f"best_{best}_{best_score}_below_min_{CONFIG['auto_strategy_min_score']}_fallback_{CONFIG['auto_strategy_fallback']}"
@@ -621,9 +741,10 @@ def select_active_strategy(candle_time: Any = None) -> str:
     return chosen
 
 
-def get_signal(candle_time: Any = None, close_price: Optional[float] = None) -> dict[str, Any]:
+def get_signal(active: str, candle_time: Any = None, close_price: Optional[float] = None) -> dict[str, Any]:
+    """Calcola il segnale per la strategia `active`. Pura: non muta lo stato.
+    Il chiamante deve invocare select_active_strategy() separatamente."""
     strategy_map = {"ema": signal_ema, "bb": signal_bb, "macd": signal_macd, "ichi": signal_ichi}
-    active = select_active_strategy(candle_time)
     try:
         signal = strategy_map.get(active, signal_ema)()
         signal["selected_strategy"] = active
@@ -650,30 +771,77 @@ def _position_pnl(pos: dict[str, Any], live_price: float) -> dict[str, float]:
     return {"exit_fill": exit_fill, "pnl_gross": pnl_gross, "fee_exit": fee_exit, "fee_total": fee_total, "pnl_net": pnl_gross - fee_total}
 
 
-async def open_position(signal: dict[str, Any], signal_price: float, candle_time: Any = None) -> None:
-    if state["open_position"] or signal.get("type") not in {"buy", "sell"}:
-        return
-    block = _entry_block_reason_for_signal(signal.get("type", "wait"), signal.get("score", 0) or 0)
-    if block:
-        current = deepcopy(state.get("signal") or signal); current.update({"entry_allowed": False, "entry_block_reason": block, "detail": f"{current.get('detail', 'Segnale rilevato')} | Entry bloccata: {block}"}); state["signal"] = current; return
-    direction = 1 if signal["type"] == "buy" else -1
+def _build_position_params(
+    signal_type: str,
+    signal_price: float,
+    capital: float,
+    active: str,
+    candle_time: Any = None,
+    market_regime: Optional[str] = None,
+    strategy_selector_reason: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Calcola i parametri di sizing di una posizione — PURA, nessun side effect.
+    Riusata da open_position (live) e dal backtest per parità garantita.
+    Ritorna None se la posizione non è apribile (size<=0 o notional troppo piccolo)."""
+    direction = 1 if signal_type == "buy" else -1
     entry_fill = _entry_fill(signal_price, direction)
-    sl_distance = atr_approx(entry_fill) * CONFIG["sl_atr_mult"]
+    sl_distance = atr_5m(entry_fill) * CONFIG["sl_atr_mult"]
     stop_loss = entry_fill - sl_distance * direction
     take_profit = entry_fill + sl_distance * CONFIG["tp_ratio"] * direction
-    risk_amount = state["capital"] * CONFIG["risk_pct"] / 100
-    max_notional = state["capital"] * CONFIG["max_notional_pct"]
+    risk_amount = capital * CONFIG["risk_pct"] / 100
+    max_notional = capital * CONFIG["max_notional_pct"]
     per_unit_risk = abs(entry_fill - stop_loss)
     size_by_risk = risk_amount / per_unit_risk if per_unit_risk > 0 else 0
     size_by_capital = max_notional / entry_fill if entry_fill > 0 else 0
     final_size = min(size_by_risk, size_by_capital)
     notional = final_size * entry_fill
     if final_size <= 0 or notional < MIN_NOTIONAL_USDT:
-        return
+        return None
     fee_entry = abs(entry_fill * final_size) * CONFIG["fee_pct"]
+    return {
+        "direction": "LONG" if direction == 1 else "SHORT", "dir": direction,
+        "entry": round(entry_fill, 6), "entry_price_signal": round(signal_price, 6),
+        "entry_price_fill": round(entry_fill, 6), "sl": round(stop_loss, 6),
+        "sl_initial": round(stop_loss, 6), "tp": round(take_profit, 6),
+        "size": round(final_size, 8), "open_time": None, "signal_candle_time": candle_time,
+        "strategy": active, "market_regime": market_regime,
+        "strategy_selector_reason": strategy_selector_reason,
+        "unrealized": 0.0, "unrealized_gross": 0.0, "trailing": CONFIG["trailing_stop"],
+        "fee_entry": round(fee_entry, 8), "fee_pct": CONFIG["fee_pct"],
+        "slippage_pct": CONFIG["slippage_pct"], "risk_amount": round(risk_amount, 6),
+        "notional": round(notional, 6), "size_by_risk": round(size_by_risk, 8),
+        "size_by_capital": round(size_by_capital, 8), "final_size": round(final_size, 8),
+        "max_notional_pct": CONFIG["max_notional_pct"], "paper_short_simulation": direction == -1,
+    }
+
+
+async def open_position(signal: dict[str, Any], signal_price: float, candle_time: Any = None) -> None:
+    if state["open_position"] or signal.get("type") not in {"buy", "sell"}:
+        return
+    block = _entry_block_reason_for_signal(signal.get("type", "wait"), signal.get("score", 0) or 0)
+    if block:
+        current = deepcopy(state.get("signal") or signal); current.update({"entry_allowed": False, "entry_block_reason": block, "detail": f"{current.get('detail', 'Segnale rilevato')} | Entry bloccata: {block}"}); state["signal"] = current; return
     active = state.get("active_strategy", CONFIG["strategy"])
-    position = {"direction": "LONG" if direction == 1 else "SHORT", "dir": direction, "entry": round(entry_fill, 6), "entry_price_signal": round(signal_price, 6), "entry_price_fill": round(entry_fill, 6), "sl": round(stop_loss, 6), "sl_initial": round(stop_loss, 6), "tp": round(take_profit, 6), "size": round(final_size, 8), "open_time": _now_iso(), "signal_candle_time": candle_time, "strategy": active, "market_regime": state.get("market_regime"), "strategy_selector_reason": state.get("strategy_selector_reason"), "unrealized": 0.0, "unrealized_gross": 0.0, "trailing": CONFIG["trailing_stop"], "fee_entry": round(fee_entry, 8), "fee_pct": CONFIG["fee_pct"], "slippage_pct": CONFIG["slippage_pct"], "risk_amount": round(risk_amount, 6), "notional": round(notional, 6), "size_by_risk": round(size_by_risk, 8), "size_by_capital": round(size_by_capital, 8), "final_size": round(final_size, 8), "max_notional_pct": CONFIG["max_notional_pct"], "paper_short_simulation": direction == -1}
-    state["open_position"] = position; _add_log("open", position); _save_paper_state(); logger.info(f"[PAPER] {position['direction']} {active} @ {entry_fill:.4f} | SL {stop_loss:.4f} | TP {take_profit:.4f}")
+    # Filtro anti-late-entry solo per strategie trend/momentum (ema, macd).
+    # BB è mean-reversion: le ultime 3 candele in direzione opposta sono la condizione di entry.
+    # Ichi già filtra internamente in signal_ichi(); evita doppio blocco.
+    if active in {"ema", "macd"}:
+        rebound_risk, rebound_why = _recent_rebound_risk(signal["type"])
+        if rebound_risk:
+            current = deepcopy(state.get("signal") or signal)
+            current.update({"entry_allowed": False, "entry_block_reason": f"late_entry_{rebound_why}", "detail": f"{current.get('detail', 'Segnale rilevato')} | Entry bloccata: ingresso in ritardo ({rebound_why})"})
+            state["signal"] = current
+            return
+    position = _build_position_params(
+        signal["type"], signal_price, state["capital"], active,
+        candle_time, state.get("market_regime"), state.get("strategy_selector_reason"),
+    )
+    if position is None:
+        return
+    position["open_time"] = _now_iso()
+    state["open_position"] = position; _add_log("open", position); _save_paper_state()
+    logger.info(f"[PAPER] {position['direction']} {active} @ {position['entry']:.4f} | SL {position['sl']:.4f} | TP {position['tp']:.4f}")
+    _tg(f"[OPEN] {position['direction']} {active} @ {position['entry']:.2f} | SL {position['sl']:.2f} | TP {position['tp']:.2f}")
 
 
 async def check_position(live_price: float) -> None:
@@ -709,6 +877,7 @@ async def close_position(signal_price: float, reason: str) -> None:
     state["trades"].insert(0, trade); state["trades"] = state["trades"][:100]
     log_pos = deepcopy(pos); log_pos["exit"] = trade["exit"]; _add_log("close", log_pos, pnl["pnl_net"], reason)
     state["open_position"] = None; _refresh_risk_guard(); _save_trades_json(); _save_paper_state(); logger.info(f"[{reason}] Chiuso {pos['direction']} {pos['strategy']} | P&L netto: {pnl['pnl_net']:+.4f} USDT")
+    _tg(f"[{reason}] {pos['direction']} {pos['strategy']} | P&L: {pnl['pnl_net']:+.2f} USDT | Cap: {state['capital']:.2f}")
 
 
 def _save_trades_json() -> None:
@@ -721,7 +890,7 @@ def _save_trades_json() -> None:
 
 def _save_paper_state() -> None:
     try:
-        data = {"paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "symbol": state["symbol"], "strategy": state["strategy"], "active_strategy": state["active_strategy"], "fallback_strategy": state["fallback_strategy"], "market_regime": state["market_regime"], "strategy_selector_reason": state["strategy_selector_reason"], "strategy_scores": state["strategy_scores"], "entry_cooldowns": state["entry_cooldowns"], "last_sl_direction": state["last_sl_direction"], "last_sl_time": state["last_sl_time"], "capital": state["capital"], "last_update": _now_iso(), "kill_switch_active": state["kill_switch_active"], "kill_switch_reason": state["kill_switch_reason"], "kill_switch_time": state["kill_switch_time"], "trading_halted": state["trading_halted"], "trading_halt_reason": state["trading_halt_reason"], "risk_guard": state["risk_guard"], "strategy_params": _strategy_env_params(), "config": _public_config(), "open_position": state["open_position"]}
+        data = {"paper_only_build": True, "live_trading_enabled": False, "exchange_order_blocked": True, "symbol": state["symbol"], "strategy": state["strategy"], "active_strategy": state["active_strategy"], "fallback_strategy": state["fallback_strategy"], "market_regime": state["market_regime"], "strategy_selector_reason": state["strategy_selector_reason"], "strategy_scores": state["strategy_scores"], "entry_cooldowns": state["entry_cooldowns"], "last_sl_direction": state["last_sl_direction"], "last_sl_time": state["last_sl_time"], "capital": state["capital"], "last_update": _now_iso(), "kill_switch_active": state["kill_switch_active"], "kill_switch_reason": state["kill_switch_reason"], "kill_switch_time": state["kill_switch_time"], "trading_halted": state["trading_halted"], "trading_halt_reason": state["trading_halt_reason"], "low_capital_alert": state["low_capital_alert"], "low_capital_alert_time": state["low_capital_alert_time"], "risk_guard": state["risk_guard"], "strategy_params": _strategy_env_params(), "config": _public_config(), "open_position": state["open_position"]}
         tmp = STATE_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"); tmp.replace(STATE_FILE)
     except Exception as exc:
         logger.warning(f"Errore salvataggio state.json: {exc}")
@@ -782,6 +951,8 @@ async def _bootstrap_historical_candles(public_client: AsyncClient) -> None:
             candle = _kline_row_to_candle(row)
             closed_candles.append(candle); closed_prices.append(candle["c"]); closed_volumes.append(candle["v"])
         for row in closed_rows_5m[-200:]:
+            c5m = {"t": int(row[0]), "T": int(row[6]), "h": float(row[2]), "l": float(row[3]), "c": float(row[4])}
+            closed_candles_5m.append(c5m)
             closed_prices_5m.append(float(row[4]))
         state["candles"] = list(closed_candles)
         state["historical_candles_loaded_1m"] = len(closed_candles)
@@ -794,7 +965,8 @@ async def _bootstrap_historical_candles(public_client: AsyncClient) -> None:
             state["last_signal_candle_time"] = last["T"]
             state["last_live_price"] = last["c"]
             state["price"] = last["c"]
-            raw = get_signal(last["T"], last["c"])
+            bootstrap_active = select_active_strategy(last["T"])
+            raw = get_signal(bootstrap_active, last["T"], last["c"])
             dec = _decorate_signal(raw, last["T"], last["c"])
             dec["entry_allowed"] = False
             dec["entry_block_reason"] = "historical_bootstrap_signal_only"
@@ -815,7 +987,8 @@ async def _handle_closed_1m_candle(k: dict[str, Any]) -> None:
     if state["last_signal_candle_time"] == candle["T"]:
         return
     _tick_entry_cooldowns()
-    raw = get_signal(candle["T"], candle["c"]); dec = _decorate_signal(raw, candle["T"], candle["c"]); state["last_signal_candle_time"] = candle["T"]
+    active = select_active_strategy(candle["T"])
+    raw = get_signal(active, candle["T"], candle["c"]); dec = _decorate_signal(raw, candle["T"], candle["c"]); state["last_signal_candle_time"] = candle["T"]
     if state["open_position"]:
         dec["entry_allowed"] = False
         dec["entry_block_reason"] = "position_already_open"
@@ -845,7 +1018,10 @@ async def _handle_kline_message(k: dict[str, Any]) -> None:
         if interval == "1m":
             await _handle_closed_1m_candle(k)
         elif interval == "5m":
-            closed_prices_5m.append(close); state["historical_candles_loaded_5m"] = len(closed_prices_5m)
+            c5m = {"t": k.get("t"), "T": k.get("T"), "h": float(k["h"]), "l": float(k["l"]), "c": close}
+            closed_candles_5m.append(c5m)
+            closed_prices_5m.append(close)
+            state["historical_candles_loaded_5m"] = len(closed_prices_5m)
 
 
 async def websocket_loop() -> None:
@@ -855,9 +1031,15 @@ async def websocket_loop() -> None:
         try:
             state["websocket_status"] = "connecting"; client = await AsyncClient.create(); await _bootstrap_historical_candles(client); manager = BinanceSocketManager(client)
             async with manager.multiplex_socket(streams) as stream:
-                state["running"] = True; state["websocket_status"] = "connected"; state["websocket_connected_at"] = _now_iso(); state["next_reconnect_time"] = None; logger.info(f"WebSocket connesso: {', '.join(streams)}")
+                state["running"] = True; state["websocket_status"] = "connected"; state["websocket_connected_at"] = _now_iso(); state["next_reconnect_time"] = None; state["reconnect_count"] = 0; state["reconnect_delay_sec"] = 0; logger.info(f"WebSocket connesso: {', '.join(streams)}")
                 while not state["shutdown_requested"]:
-                    msg = await stream.recv(); data = msg.get("data", msg); k = data.get("k") if isinstance(data, dict) else None
+                    # Timeout di 90s: se Binance smette di inviare dati senza chiudere
+                    # il socket (connessione zombie), forziamo il reconnect.
+                    try:
+                        msg = await asyncio.wait_for(stream.recv(), timeout=90)
+                    except asyncio.TimeoutError:
+                        raise ConnectionError("Nessun dato dal WebSocket per 90s (connessione zombie)")
+                    data = msg.get("data", msg); k = data.get("k") if isinstance(data, dict) else None
                     if k:
                         await _handle_kline_message(k)
         except asyncio.CancelledError:
@@ -941,6 +1123,7 @@ async def api_kill_switch(body: dict[str, Any]) -> JSONResponse:
         raise HTTPException(status_code=400, detail="enabled deve essere booleano")
     if enabled:
         state["kill_switch_active"] = True; state["kill_switch_reason"] = str(body.get("reason") or "dashboard_kill_switch"); state["kill_switch_time"] = _now_iso()
+        _tg(f"[HALT] Kill switch attivato: {state['kill_switch_reason']}")
         if body.get("close_position") is True and state["open_position"] and state["last_live_price"]:
             await close_position(state["last_live_price"], "KILL")
     else:
