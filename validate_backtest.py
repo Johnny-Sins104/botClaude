@@ -6,6 +6,7 @@ indipendentemente dai valori presenti nel .env locale.
 Ogni run salva e ripristina bot.CONFIG completo con try/finally.
 
 Uso: python validate_backtest.py
+     python validate_backtest.py --test
 """
 
 import os
@@ -109,7 +110,7 @@ def run_without_costs(candles_1m: list, candles_5m: list, cap: float,
 # ── Split train / OOS con warm-up ────────────────────────────────────────────
 
 def split_candles(candles_1m: list, candles_5m: list, train_days: int):
-    """Divide in train e OOS. Ritorna anche le candele di warm-up per OOS."""
+    """Divide in train e OOS."""
     first_t = candles_1m[0]["t"]
     split_ms = first_t + train_days * 86400_000
     train_1m = [c for c in candles_1m if c["T"] < split_ms]
@@ -123,8 +124,8 @@ def oos_with_warmup(train_1m: list, train_5m: list,
                     oos_1m: list, oos_5m: list) -> tuple[list, list, int]:
     """
     Prepende le ultime OOS_WARMUP_1M candele 1m e OOS_WARMUP_5M candele 5m
-    del training come warm-up per l'OOS. Nessun lookahead: solo candele prima
-    del timestamp OOS. Ritorna (combined_1m, combined_5m, warmup_count).
+    del training come warm-up per l'OOS. Nessun lookahead. Ritorna
+    (combined_1m, combined_5m, warmup_count).
     """
     warmup_1m = train_1m[-OOS_WARMUP_1M:]
     warmup_5m = train_5m[-OOS_WARMUP_5M:]
@@ -143,39 +144,60 @@ def monthly_breakdown(trades: list) -> dict:
     return {m: round(sum(v), 2) for m, v in sorted(by_month.items())}
 
 
-def monthly_anomaly_check(trades: list) -> tuple[bool, str]:
+def weekly_breakdown(trades: list) -> dict:
+    """Aggrega il P&L netto per settimana ISO (YYYY-Www)."""
+    by_week: dict[str, list] = {}
+    for t in trades:
+        dt = datetime.fromisoformat(t["time"])
+        week_key = dt.strftime("%G-W%V")
+        by_week.setdefault(week_key, []).append(t["pnl_net"])
+    return {w: round(sum(v), 2) for w, v in sorted(by_week.items())}
+
+
+def temporal_concentration_check(trades: list) -> tuple[bool, str]:
     """
-    Criterio mensile deterministico:
-    Un mese e' anomalo se il suo P&L e' inferiore a (media - 2 * deviazione_standard)
-    dei P&L mensili. Richiede almeno 2 mesi. Soglia z-score: -2.0.
-    Ritorna (anomalia_rilevata, descrizione).
+    Criterio deterministico di concentrazione temporale. Richiede almeno 3 settimane.
+    Segnala anomalia se la settimana peggiore in perdita supera il 50% del P&L
+    assoluto totale (somma dei valori assoluti di tutti i bucket settimanali).
+
+    Formulazione esplicita:
+        worst_week = settimana con P&L minimo (se < 0)
+        total_abs  = sum(|P&L_settimanale| per ogni settimana)
+        anomalia   = worst_week < 0 AND |worst_week| / total_abs > 0.50
+
+    Funziona su finestre di 3+ settimane senza ipotesi di distribuzione normale.
     """
-    monthly = monthly_breakdown(trades)
-    values = list(monthly.values())
-    if len(values) < 2:
-        return False, "mesi_insufficienti"
-    mean = sum(values) / len(values)
-    variance = sum((v - mean) ** 2 for v in values) / len(values)
-    std = math.sqrt(variance)
-    if std < 1e-9:
+    weekly = weekly_breakdown(trades)
+    weeks = sorted(weekly.items())
+    if len(weeks) < 3:
+        return False, f"settimane_insufficienti({len(weeks)}<3)"
+    total_abs = sum(abs(v) for _, v in weeks)
+    if total_abs < 1e-9:
         return False, "nessuna_varianza"
-    worst_month = min(monthly.items(), key=lambda x: x[1])
-    z = (worst_month[1] - mean) / std
-    if z < -2.0:
-        return True, f"anomalia_{worst_month[0]}:pnl={worst_month[1]:+.2f}_z={z:.1f}"
-    return False, f"ok (peggiore={worst_month[0]}:{worst_month[1]:+.2f}_z={z:.1f})"
+    worst_week = min(weeks, key=lambda x: x[1])
+    if worst_week[1] >= 0:
+        return False, f"nessuna_settimana_negativa (peggiore={worst_week[0]}:{worst_week[1]:+.2f})"
+    concentration = abs(worst_week[1]) / total_abs
+    if concentration > 0.50:
+        return True, (f"concentrazione_{worst_week[0]}:"
+                      f"pnl={worst_week[1]:+.2f}_conc={concentration:.0%}_totabs={total_abs:.2f}")
+    return False, (f"ok (peggiore={worst_week[0]}:{worst_week[1]:+.2f}_conc={concentration:.0%})")
 
 
-def is_promising(m: dict, trades: list | None = None) -> tuple[bool, str]:
+def is_promising(m: dict, trades: list | None = None,
+                 allow_short: bool = False) -> tuple[bool, str]:
     """
     Una configurazione e' PROMETTENTE se e solo se:
     1. Almeno 50 trade
     2. Profit Factor > 1
     3. P&L netto positivo dopo costi
-    4. Nessun lato (long/short) domina per oltre il 90% del P&L assoluto
-    5. Nessun mese con perdita anomala (z-score < -2.0)
+    4. [Solo se allow_short=True] Nessun lato domina per oltre il 90% del P&L assoluto
+    5. Nessuna settimana concentra oltre il 50% delle perdite assolute totali
 
-    Ritorna (bool, motivo) per documentazione esplicita nel report e nei test.
+    Criterio 4 disabilitato in modalita' long-only (allow_short=False): con short
+    disabilitati e' atteso che il 100% dei trade sia LONG, penalizzarlo sarebbe errato.
+
+    Ritorna (bool, motivo) per documentazione esplicita.
     """
     if m["trades"] < 50:
         return False, f"trade_{m['trades']}_sotto_50"
@@ -183,18 +205,19 @@ def is_promising(m: dict, trades: list | None = None) -> tuple[bool, str]:
         return False, f"pf_{m['profit_factor']:.3f}_non_supera_1"
     if m["pnl_net"] <= 0:
         return False, f"pnl_netto_{m['pnl_net']:.2f}_non_positivo"
-    long_abs = abs(m["by_direction"].get("LONG", {}).get("pnl_net", 0))
-    short_abs = abs(m["by_direction"].get("SHORT", {}).get("pnl_net", 0))
-    total = long_abs + short_abs
-    if total > 0:
-        dominant = max(long_abs, short_abs) / total
-        if dominant > 0.9:
-            side = "LONG" if long_abs > short_abs else "SHORT"
-            return False, f"dominato_{side}_{dominant*100:.0f}pct"
+    if allow_short:
+        long_abs = abs(m["by_direction"].get("LONG", {}).get("pnl_net", 0))
+        short_abs = abs(m["by_direction"].get("SHORT", {}).get("pnl_net", 0))
+        total = long_abs + short_abs
+        if total > 0:
+            dominant = max(long_abs, short_abs) / total
+            if dominant > 0.9:
+                side = "LONG" if long_abs > short_abs else "SHORT"
+                return False, f"dominato_{side}_{dominant*100:.0f}pct"
     if trades:
-        anomaly, why = monthly_anomaly_check(trades)
-        if anomaly:
-            return False, f"mese_anomalo:{why}"
+        anom, why = temporal_concentration_check(trades)
+        if anom:
+            return False, f"concentrazione_temporale:{why}"
     return True, "ok"
 
 
@@ -205,15 +228,18 @@ def expectancy(m: dict) -> float:
 
 
 def print_report(label: str, m: dict, trades: list | None = None,
-                 show_monthly: bool = False, cfg_used: dict | None = None) -> None:
-    ok, reason = is_promising(m, trades)
+                 show_weekly: bool = False, cfg_used: dict | None = None,
+                 allow_short: bool = False) -> None:
+    ok, reason = is_promising(m, trades, allow_short)
     tag = " [PROMETTENTE]" if ok else f" [NON SUPERA: {reason}]"
+    mode_str = "LONG+SHORT" if allow_short else "LONG-ONLY"
     long_d = m["by_direction"].get("LONG", {})
     short_d = m["by_direction"].get("SHORT", {})
     pnl_sign = "+" if m["pnl_net"] >= 0 else ""
     print(f"\n{LINE}")
     print(f"  {label}{tag}")
     print(DASH)
+    print(f"  Modo  : {mode_str}")
     print(f"  Trade : {m['trades']:4d}  Long: {long_d.get('trades',0):3d}  Short: {short_d.get('trades',0):3d}")
     print(f"  Win%  : {m['win_rate']:5.1f}%  PF: {m['profit_factor']:6.3f}  Payoff: {m['payoff_ratio']:.3f}")
     print(f"  P&L   : {pnl_sign}{m['pnl_net']:.2f} USDT  ({pnl_sign}{m['pnl_pct']:.3f}%)")
@@ -225,11 +251,13 @@ def print_report(label: str, m: dict, trades: list | None = None,
             for s, v in m["by_strategy"].items()
         )
         print(f"  Strat : {strats}")
-    if show_monthly and trades:
+    if show_weekly and trades:
+        weekly = weekly_breakdown(trades)
         monthly = monthly_breakdown(trades)
-        anom, why = monthly_anomaly_check(trades)
-        print(f"  Mensile: {monthly}")
-        print(f"  Anomalia mensile (z<-2): {'SI - ' + why if anom else 'NO - ' + why}")
+        anom, why = temporal_concentration_check(trades)
+        print(f"  Mensile  : {monthly}")
+        print(f"  Settimane: {weekly}")
+        print(f"  Conc.temp (>50%): {'SI - ' + why if anom else 'NO - ' + why}")
     if cfg_used:
         short_cfg = {k: v for k, v in cfg_used.items()
                      if k in ("strategy", "auto_strategy_selector", "htf_trend_filter",
@@ -272,91 +300,105 @@ def main() -> None:
     print(f"  Train: {len(train_1m)} candele 1m ({60}d)  "
           f"OOS: {len(oos_1m)} candele 1m ({oos_days}d)  "
           f"warmup OOS: {oos_warmup_count} candele 1m")
+    print(f"\n  Criteri is_promising:")
+    print(f"    1. >=50 trade")
+    print(f"    2. PF > 1")
+    print(f"    3. P&L netto > 0")
+    print(f"    4. [Solo allow_short=True] nessun lato >90% del P&L assoluto")
+    print(f"    5. Nessuna settimana >50% del P&L assoluto totale (conc. temporale)")
 
     print(f"\n{'='*72}")
     print("  PARTE 1 — 90 GIORNI COMPLETI")
     print(f"{'='*72}")
 
-    runs_90d: list[tuple[str, dict, dict, list | None]] = []
-
     # Auto selector, HTF on/off
     for htf in (True, False):
         htf_tag = "HTF-ON" if htf else "HTF-OFF"
         ov = {"auto_strategy_selector": True, "htf_trend_filter": htf}
+        cfg_used = {**VALIDATION_CONFIG, **ov}
+        allow_short = cfg_used.get("allow_short", False)
         r = run_with_validation(c1, c5, cap, overrides=ov)
         m = compute_metrics(r, cap)
-        cfg_used = {**VALIDATION_CONFIG, **ov}
-        print_report(f"90d Auto {htf_tag} [CON COSTI]", m, r["trades"], show_monthly=True, cfg_used=cfg_used)
+        print_report(f"90d Auto {htf_tag} [CON COSTI]", m, r["trades"],
+                     show_weekly=True, cfg_used=cfg_used, allow_short=allow_short)
         r_nc = run_without_costs(c1, c5, cap, overrides=ov)
         m_nc = compute_metrics(r_nc, cap)
-        print_report(f"90d Auto {htf_tag} [SENZA COSTI]", m_nc, r_nc["trades"])
-        runs_90d.append((f"90d Auto {htf_tag}", r, cfg_used, r["trades"]))
+        print_report(f"90d Auto {htf_tag} [SENZA COSTI]", m_nc, r_nc["trades"],
+                     allow_short=allow_short)
 
     # Ogni strategia singola con HTF on e off
     for strat in ("ema", "bb", "macd", "ichi"):
         for htf in (True, False):
             htf_tag = "HTF-ON" if htf else "HTF-OFF"
             ov = {"auto_strategy_selector": False, "strategy": strat, "htf_trend_filter": htf}
+            cfg_used = {**VALIDATION_CONFIG, **ov}
+            allow_short = cfg_used.get("allow_short", False)
             r = run_with_validation(c1, c5, cap, overrides=ov)
             m = compute_metrics(r, cap)
-            cfg_used = {**VALIDATION_CONFIG, **ov}
             print_report(f"90d {strat.upper()} {htf_tag} [CON COSTI]", m, r["trades"],
-                         show_monthly=True, cfg_used=cfg_used)
-            runs_90d.append((f"90d {strat.upper()} {htf_tag}", r, cfg_used, r["trades"]))
+                         show_weekly=True, cfg_used=cfg_used, allow_short=allow_short)
 
     print(f"\n{'='*72}")
     print(f"  PARTE 2 — SPLIT TRAIN 60d / OOS {oos_days}d")
-    print(f"  OOS warm-up: {oos_warmup_count} candele 1m + {len(oos_combined_5m)-len(oos_5m)} candele 5m")
-    print(f"  Criterio anomalia mensile: P&L mensile < media - 2*std (z-score < -2.0)")
+    print(f"  OOS warm-up: {oos_warmup_count} candele 1m + "
+          f"{len(oos_combined_5m)-len(oos_5m)} candele 5m")
+    print(f"  Criterio anomalia: conc. temporale settimanale > 50%")
     print(f"{'='*72}")
 
-    runs_oos: list[tuple[str, dict, dict, list | None]] = []
+    runs_oos: list[tuple[str, dict, dict, list, bool]] = []
 
     # Train
-    r_train = run_with_validation(train_1m, train_5m, cap,
-                                  overrides={"auto_strategy_selector": True, "htf_trend_filter": True})
+    ov_train = {"auto_strategy_selector": True, "htf_trend_filter": True}
+    cfg_train = {**VALIDATION_CONFIG, **ov_train}
+    r_train = run_with_validation(train_1m, train_5m, cap, overrides=ov_train)
     m_train = compute_metrics(r_train, cap)
-    print_report("Train 60d Auto HTF-ON [CON COSTI]", m_train, r_train["trades"], show_monthly=True)
+    print_report("Train 60d Auto HTF-ON [CON COSTI]", m_train, r_train["trades"],
+                 show_weekly=True, allow_short=cfg_train.get("allow_short", False))
 
     # OOS auto HTF on/off con warmup
     for htf in (True, False):
         htf_tag = "HTF-ON" if htf else "HTF-OFF"
         ov = {"auto_strategy_selector": True, "htf_trend_filter": htf}
+        cfg_used = {**VALIDATION_CONFIG, **ov}
+        allow_short = cfg_used.get("allow_short", False)
         r = run_with_validation(oos_combined_1m, oos_combined_5m, cap,
                                 overrides=ov, warmup=oos_warmup_count)
         m = compute_metrics(r, cap)
-        cfg_used = {**VALIDATION_CONFIG, **ov}
         print_report(f"OOS {oos_days}d Auto {htf_tag} [CON COSTI]", m, r["trades"],
-                     show_monthly=True, cfg_used=cfg_used)
+                     show_weekly=True, cfg_used=cfg_used, allow_short=allow_short)
         r_nc = run_without_costs(oos_combined_1m, oos_combined_5m, cap,
                                  overrides=ov, warmup=oos_warmup_count)
         m_nc = compute_metrics(r_nc, cap)
-        print_report(f"OOS {oos_days}d Auto {htf_tag} [SENZA COSTI]", m_nc, r_nc["trades"])
-        runs_oos.append((f"OOS {oos_days}d Auto {htf_tag}", r, cfg_used, r["trades"]))
+        print_report(f"OOS {oos_days}d Auto {htf_tag} [SENZA COSTI]", m_nc, r_nc["trades"],
+                     allow_short=allow_short)
+        runs_oos.append((f"OOS {oos_days}d Auto {htf_tag}", r, cfg_used, r["trades"], allow_short))
 
     # OOS per strategia singola con HTF on e off
     for strat in ("ema", "bb", "macd", "ichi"):
         for htf in (True, False):
             htf_tag = "HTF-ON" if htf else "HTF-OFF"
             ov = {"auto_strategy_selector": False, "strategy": strat, "htf_trend_filter": htf}
+            cfg_used = {**VALIDATION_CONFIG, **ov}
+            allow_short = cfg_used.get("allow_short", False)
             r = run_with_validation(oos_combined_1m, oos_combined_5m, cap,
                                     overrides=ov, warmup=oos_warmup_count)
             m = compute_metrics(r, cap)
-            cfg_used = {**VALIDATION_CONFIG, **ov}
             print_report(f"OOS {oos_days}d {strat.upper()} {htf_tag} [CON COSTI]", m, r["trades"],
-                         show_monthly=True, cfg_used=cfg_used)
-            runs_oos.append((f"OOS {oos_days}d {strat.upper()} {htf_tag}", r, cfg_used, r["trades"]))
+                         show_weekly=True, cfg_used=cfg_used, allow_short=allow_short)
+            runs_oos.append((f"OOS {oos_days}d {strat.upper()} {htf_tag}", r, cfg_used,
+                             r["trades"], allow_short))
 
     # ── Verdetto ─────────────────────────────────────────────────────────────
     print(f"\n{'#'*72}")
     print("  VERDETTO FINALE")
-    print(f"  Criteri: >=50 trade OOS, PF>1, P&L>0 dopo costi, nessun lato >90%, no anomalia mensile")
+    print(f"  Criteri: >=50 trade, PF>1, P&L>0, no conc.temporale >50%")
+    print(f"  (criterio dominanza lato disabilitato: allow_short=False in VALIDATION_CONFIG)")
     print(f"{'#'*72}")
 
     promising = []
-    for label, r, cfg, trades in runs_oos:
+    for label, r, cfg, trades, allow_short in runs_oos:
         m = compute_metrics(r, cap)
-        ok, reason = is_promising(m, trades)
+        ok, reason = is_promising(m, trades, allow_short)
         if ok:
             promising.append((label, m, cfg))
 
@@ -369,286 +411,21 @@ def main() -> None:
     else:
         print("\n  Configurazioni PROMETTENTI (out-of-sample):")
         for label, m, cfg in promising:
-            print(f"    {label}: {m['trades']}t PF={m['profit_factor']} "
+            print(f"    {label}: {m['trades']}t PF={m['profit_factor']:.3f} "
                   f"P&L={m['pnl_net']:+.2f} USDT")
         print("\n  AVVERTENZA: superare i criteri non garantisce profitti futuri.")
 
     print(f"\n{'#'*72}\n")
 
 
-# ── Test di validazione ───────────────────────────────────────────────────────
-
-class TestValidationReproducible(unittest.TestCase):
-    """PATCH 5 — verifica che env diverse non cambino i risultati."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.c1 = load_cache("BTCUSDT", "1m")
-        cls.c5 = load_cache("BTCUSDT", "5m")
-        if not cls.c1:
-            raise unittest.SkipTest("Cache BTCUSDT non disponibile")
-        # Usa solo prime 3000 candele per velocita'
-        cls.c1s = cls.c1[:3000]
-        cls.c5s = cls.c5[:600]
-
-    def test_env_values_dont_change_results(self):
-        """Config .env diverse devono produrre risultati identici a VALIDATION_CONFIG."""
-        orig = deepcopy(bot.CONFIG)
-        try:
-            r1 = run_with_validation(self.c1s, self.c5s, 1000.0)
-            # Corrompi CONFIG con valori molto diversi
-            bot.CONFIG["fee_pct"] = 0.99
-            bot.CONFIG["ema_slow"] = 200
-            bot.CONFIG["tp_ratio"] = 10.0
-            bot.CONFIG["allow_short"] = True
-            r2 = run_with_validation(self.c1s, self.c5s, 1000.0)
-            self.assertAlmostEqual(r1["final_capital"], r2["final_capital"], places=6)
-            self.assertEqual(len(r1["trades"]), len(r2["trades"]))
-        finally:
-            bot.CONFIG.clear()
-            bot.CONFIG.update(orig)
-
-    def test_config_fully_restored_after_run(self):
-        """bot.CONFIG completamente ripristinato dopo run_with_validation."""
-        orig = deepcopy(bot.CONFIG)
-        run_with_validation(self.c1s, self.c5s, 1000.0)
-        self.assertEqual(bot.CONFIG, orig)
-
-    def test_config_fully_restored_after_overrides(self):
-        """Anche con overrides specifici, CONFIG e' ripristinato."""
-        orig = deepcopy(bot.CONFIG)
-        run_with_validation(self.c1s, self.c5s, 1000.0,
-                            overrides={"strategy": "bb", "htf_trend_filter": False})
-        self.assertEqual(bot.CONFIG, orig)
-
-    def test_validation_config_keys_are_complete(self):
-        """VALIDATION_CONFIG deve coprire almeno le chiavi richieste dall'audit."""
-        required = {
-            "strategy", "auto_strategy_selector", "auto_strategy_fallback",
-            "allow_short", "risk_pct", "tp_ratio", "sl_atr_mult",
-            "max_notional_pct", "min_entry_score",
-            "ema_fast", "ema_slow", "rsi_period", "bb_period", "bb_dev",
-            "macd_fast", "macd_slow", "macd_sig",
-            "ichi_t", "ichi_k", "ichi_s",
-            "whipsaw_filter", "mtf_filter",
-            "htf_trend_filter", "htf_trend_fast", "htf_trend_slow", "htf_trend_min_gap_pct",
-            "trailing_stop", "post_sl_cooldown_candles",
-            "fee_pct", "slippage_pct",
-        }
-        missing = required - set(VALIDATION_CONFIG.keys())
-        self.assertEqual(missing, set(), f"Chiavi mancanti in VALIDATION_CONFIG: {missing}")
-
-
-class TestNoCost(unittest.TestCase):
-    """PATCH 6 — verifica che run_without_costs sia davvero privo di costi."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.c1 = load_cache("BTCUSDT", "1m")
-        cls.c5 = load_cache("BTCUSDT", "5m")
-        if not cls.c1:
-            raise unittest.SkipTest("Cache BTCUSDT non disponibile")
-        cls.c1s = cls.c1[:3000]
-        cls.c5s = cls.c5[:600]
-
-    def test_no_cost_fees_are_zero(self):
-        """run_without_costs deve produrre fee_total=0 per ogni trade."""
-        r = run_without_costs(self.c1s, self.c5s, 1000.0)
-        for t in r["trades"]:
-            self.assertEqual(t.get("fee_total", 0), 0.0,
-                             f"fee_total non zero: {t.get('fee_total')}")
-
-    def test_no_cost_total_fees_zero_in_metrics(self):
-        """Metriche calcolate su no-cost run devono avere total_fees=0."""
-        r = run_without_costs(self.c1s, self.c5s, 1000.0)
-        m = compute_metrics(r, 1000.0)
-        self.assertEqual(m["total_fees"], 0.0)
-
-    def test_no_cost_pnl_gross_equals_net(self):
-        """Senza costi, pnl_gross deve essere uguale a pnl_net."""
-        r = run_without_costs(self.c1s, self.c5s, 1000.0)
-        for t in r["trades"]:
-            self.assertAlmostEqual(t["pnl_gross"], t["pnl_net"], places=6,
-                                   msg=f"pnl_gross != pnl_net: {t}")
-
-    def test_no_cost_has_more_or_equal_pnl(self):
-        """P&L senza costi deve essere >= P&L con costi."""
-        r_cost = run_with_validation(self.c1s, self.c5s, 1000.0)
-        r_nc   = run_without_costs(self.c1s, self.c5s, 1000.0)
-        self.assertGreaterEqual(r_nc["final_capital"], r_cost["final_capital"])
-
-    def test_no_cost_can_differ_in_trade_count(self):
-        """
-        Diversi costi possono cambiare l'andamento del capitale, potenzialmente
-        cambiando il numero di trade o la loro sequenza. Questo test documenta
-        che e' un comportamento atteso, non un errore.
-        (Il test non fallisce se i trade sono uguali — verifica solo che il
-        framework supporti differenze, non che le imponga.)
-        """
-        r_cost = run_with_validation(self.c1s, self.c5s, 1000.0)
-        r_nc   = run_without_costs(self.c1s, self.c5s, 1000.0)
-        # I trade devono essere liste valide (anche se uguali in numero)
-        self.assertIsInstance(r_cost["trades"], list)
-        self.assertIsInstance(r_nc["trades"], list)
-
-
-class TestOOSWarmup(unittest.TestCase):
-    """PATCH 7 — verifica warm-up OOS e assenza di lookahead."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.c1 = load_cache("BTCUSDT", "1m")
-        cls.c5 = load_cache("BTCUSDT", "5m")
-        if not cls.c1:
-            raise unittest.SkipTest("Cache BTCUSDT non disponibile")
-        cls.train_1m, cls.train_5m, cls.oos_1m, cls.oos_5m = split_candles(
-            cls.c1, cls.c5, 60
-        )
-        cls.combined_1m, cls.combined_5m, cls.wup = oos_with_warmup(
-            cls.train_1m, cls.train_5m, cls.oos_1m, cls.oos_5m
-        )
-
-    def test_warmup_count_correct(self):
-        """Il warmup count deve essere <= OOS_WARMUP_1M e <= len(train_1m)."""
-        self.assertLessEqual(self.wup, OOS_WARMUP_1M)
-        self.assertLessEqual(self.wup, len(self.train_1m))
-        self.assertGreater(self.wup, 0)
-
-    def test_no_trades_during_warmup(self):
-        """Nessun trade puo' avere timestamp prima dell'inizio OOS."""
-        if not self.oos_1m:
-            self.skipTest("Dati OOS non disponibili")
-        oos_start_t = self.oos_1m[0]["t"]
-        r = run_with_validation(self.combined_1m, self.combined_5m, 1000.0,
-                                 warmup=self.wup)
-        for trade in r["trades"]:
-            trade_t = datetime.fromisoformat(trade["time"]).timestamp() * 1000
-            self.assertGreaterEqual(
-                trade_t, oos_start_t - 60_000,  # tolleranza 1 candela
-                f"Trade durante warmup: {trade['time']} < oos_start"
-            )
-
-    def test_5m_buffer_filled_after_warmup(self):
-        """Dopo il warm-up, closed_prices_5m deve avere >= htf_trend_slow entry."""
-        from backtest import _reset_bot_state, _sync_5m_buffer
-        _reset_bot_state(1000.0)
-        idx = [0]
-        htf_slow = VALIDATION_CONFIG["htf_trend_slow"]
-        for candle in self.combined_1m[:self.wup]:
-            _sync_5m_buffer(candle, self.combined_5m, idx)
-            import bot as _bot
-            _bot.closed_candles.append(candle)
-            _bot.closed_prices.append(candle["c"])
-        self.assertGreaterEqual(
-            len(bot.closed_prices_5m), htf_slow,
-            f"Buffer 5m insufficiente dopo warmup: {len(bot.closed_prices_5m)} < {htf_slow}"
-        )
-
-    def test_no_lookahead_in_5m_sync(self):
-        """La sincronizzazione 5m non deve usare candele successive alla 1m corrente."""
-        from backtest import _reset_bot_state, _sync_5m_buffer
-        _reset_bot_state(1000.0)
-        idx = [0]
-        for candle in self.combined_1m[:200]:
-            t_before = candle["T"]
-            _sync_5m_buffer(candle, self.combined_5m, idx)
-            # Ogni candela 5m in buffer deve avere T <= t_before
-            for c5m in list(bot.closed_candles_5m):
-                self.assertLessEqual(
-                    c5m["T"], t_before + 1,
-                    f"Lookahead: 5m candle T={c5m['T']} > 1m T={t_before}"
-                )
-            bot.closed_candles.append(candle)
-            bot.closed_prices.append(candle["c"])
-
-    def test_oos_deterministic(self):
-        """Due run identici producono risultati identici."""
-        r1 = run_with_validation(self.combined_1m, self.combined_5m, 1000.0,
-                                  warmup=self.wup)
-        r2 = run_with_validation(self.combined_1m, self.combined_5m, 1000.0,
-                                  warmup=self.wup)
-        self.assertAlmostEqual(r1["final_capital"], r2["final_capital"], places=6)
-        self.assertEqual(len(r1["trades"]), len(r2["trades"]))
-
-
-class TestCriteria(unittest.TestCase):
-    """PATCH 8 — verifica criteri is_promising e monthly_anomaly_check."""
-
-    def _make_metrics(self, n, pf, pnl, long_pnl, short_pnl):
-        return {
-            "trades": n, "wins": 0, "losses": 0,
-            "win_rate": 50.0, "profit_factor": pf, "payoff_ratio": 1.0,
-            "pnl_net": pnl, "pnl_pct": pnl / 10,
-            "max_dd": 5.0, "total_fees": 0.0,
-            "break_even_wr": 50.0, "tp_exits": 0, "sl_exits": 0,
-            "avg_win": 0.0, "avg_loss": 0.0,
-            "by_strategy": {}, "by_direction": {
-                "LONG": {"trades": 25, "pnl_net": long_pnl},
-                "SHORT": {"trades": 25, "pnl_net": short_pnl},
-            }
-        }
-
-    def test_too_few_trades(self):
-        m = self._make_metrics(49, 1.5, 50.0, 30.0, 20.0)
-        ok, reason = is_promising(m)
-        self.assertFalse(ok)
-        self.assertIn("50", reason)
-
-    def test_pf_not_above_1(self):
-        m = self._make_metrics(60, 1.0, 50.0, 30.0, 20.0)
-        ok, reason = is_promising(m)
-        self.assertFalse(ok)
-        self.assertIn("pf", reason)
-
-    def test_negative_pnl(self):
-        m = self._make_metrics(60, 1.5, -10.0, 30.0, -40.0)
-        ok, reason = is_promising(m)
-        self.assertFalse(ok)
-
-    def test_dominant_side(self):
-        m = self._make_metrics(60, 1.5, 50.0, 49.0, 1.0)
-        ok, reason = is_promising(m)
-        self.assertFalse(ok)
-        self.assertIn("LONG", reason)
-
-    def test_passes_all_criteria(self):
-        m = self._make_metrics(60, 1.5, 50.0, 30.0, 20.0)
-        ok, reason = is_promising(m)
-        self.assertTrue(ok, f"Atteso True, got: {reason}")
-
-    def test_monthly_anomaly_detected(self):
-        # Un mese con perdita estrema (z < -2)
-        trades = (
-            [{"time": "2026-01-15T10:00:00", "pnl_net": 5.0}] * 10 +
-            [{"time": "2026-02-15T10:00:00", "pnl_net": 5.0}] * 10 +
-            [{"time": "2026-03-15T10:00:00", "pnl_net": -200.0}]  # anomalia
-        )
-        anom, why = monthly_anomaly_check(trades)
-        self.assertTrue(anom, f"Anomalia non rilevata: {why}")
-
-    def test_monthly_no_anomaly(self):
-        # Mesi uniformi
-        trades = (
-            [{"time": "2026-01-15T10:00:00", "pnl_net": -5.0}] * 10 +
-            [{"time": "2026-02-15T10:00:00", "pnl_net": -4.0}] * 10 +
-            [{"time": "2026-03-15T10:00:00", "pnl_net": -6.0}] * 10
-        )
-        anom, why = monthly_anomaly_check(trades)
-        self.assertFalse(anom, f"Falso positivo: {why}")
-
-    def test_entry_allowed_false_for_wait(self):
-        """is_promising non viene mai chiamato per segnali 'wait' — test documentale."""
-        # Il report non mostra ALLOWED per wait: e' garantito dalla logica UI
-        # Questo test verifica is_promising direttamente sui dati
-        m = self._make_metrics(0, 0.0, 0.0, 0.0, 0.0)
-        ok, reason = is_promising(m)
-        self.assertFalse(ok)  # 0 trade non supera il criterio
-
-
 if __name__ == "__main__":
-    import sys
     if "--test" in sys.argv or "test" in sys.argv:
-        sys.argv = [sys.argv[0]]
-        unittest.main(verbosity=2)
+        # Tests moved to tests/test_validation.py — PATCH 11
+        from tests import test_validation
+        loader = unittest.TestLoader()
+        suite = loader.loadTestsFromModule(test_validation)
+        runner = unittest.TextTestRunner(verbosity=2)
+        result = runner.run(suite)
+        sys.exit(0 if result.wasSuccessful() else 1)
     else:
         main()
