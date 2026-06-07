@@ -95,10 +95,10 @@ CONFIG: dict[str, Any] = {
     "tp_ratio": _env_float("TP_RATIO", 2.0),
     "sl_atr_mult": _env_float("SL_ATR_MULT", 1.2),
     "ema_fast": _env_int("EMA_FAST", 9),
-    "ema_slow": _env_int("EMA_SLOW", 26),
+    "ema_slow": _env_int("EMA_SLOW", 21),
     "rsi_period": _env_int("RSI_PERIOD", 14),
     "bb_period": _env_int("BB_PERIOD", 20),
-    "bb_dev": _env_float("BB_DEV", 2.2, aliases=("BB_MULT",)),
+    "bb_dev": _env_float("BB_DEV", 2.0, aliases=("BB_MULT",)),
     "macd_fast": _env_int("MACD_FAST", 12),
     "macd_slow": _env_int("MACD_SLOW", 26),
     "macd_sig": _env_int("MACD_SIG", 9, aliases=("MACD_SIGNAL",)),
@@ -108,7 +108,7 @@ CONFIG: dict[str, Any] = {
     "fee_pct": _env_float("FEE_PCT", 0.001),
     "slippage_pct": _env_float("SLIPPAGE_PCT", 0.0002),
     "max_notional_pct": _env_float("MAX_NOTIONAL_PCT", 0.35),
-    "allow_short": _env_bool("ALLOW_SHORT", "true"),
+    "allow_short": _env_bool("ALLOW_SHORT", "false"),
     "min_entry_score": _env_int("MIN_ENTRY_SCORE", 75),
     "daily_loss_limit_pct": _env_float("DAILY_LOSS_LIMIT_PCT", 3.0),
     "daily_loss_limit_enabled": _env_bool("DAILY_LOSS_LIMIT_ENABLED", "true"),
@@ -946,7 +946,7 @@ async def _bootstrap_historical_candles(public_client: AsyncClient) -> None:
         # The last REST kline can still be open; drop it and let websocket handle live updates.
         closed_rows_1m = rows_1m[:-1] if len(rows_1m) > 1 else rows_1m
         closed_rows_5m = rows_5m[:-1] if len(rows_5m) > 1 else rows_5m
-        closed_candles.clear(); closed_prices.clear(); closed_volumes.clear(); closed_prices_5m.clear()
+        closed_candles.clear(); closed_prices.clear(); closed_volumes.clear(); closed_prices_5m.clear(); closed_candles_5m.clear()
         for row in closed_rows_1m[-MAX_CANDLES:]:
             candle = _kline_row_to_candle(row)
             closed_candles.append(candle); closed_prices.append(candle["c"]); closed_volumes.append(candle["v"])
